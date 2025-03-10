@@ -24,16 +24,29 @@ jobs:
         run: |
           apk add build-base git p7zip
 
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git fetch --prune --unshallow
 
-      - name: Compile 
+      - name: Compile libbdm
         run: |
           make -C libbdm clean all
+
+      - name: Compile __bdm_assault
+        run: |
           make -C __bdm_assault/ clean all
+
+      - name: Compile __usbd_bd_assault
+        run: |
           make -C __usbd_bd_assault/ clean all
+
+      - name: Compile __atad_bd_assault
+        run: |
+          make -C __atad_bd_assault/ clean all
+
+      - name: pack 
+        run: |
           mkdir -p READY_TO_USE/POPStarter/POPSTARTER/
           mkdir -p READY_TO_USE/FreeMcBoot/SYS-CONF/
           cp bdm_assault.irx READY_TO_USE/POPStarter/POPSTARTER/usbd.irx
@@ -44,7 +57,7 @@ jobs:
 
       - name: Upload artifacts
         if: ${{ success() }}
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: BDM_ASSAULT
           path: |
@@ -52,7 +65,7 @@ jobs:
 
       - name: Create release
         if: github.ref == 'refs/heads/main'
-        uses: marvinpinto/action-automatic-releases@latest
+        uses: mathieucarbou/marvinpinto-action-automatic-releases@latest
         with:
           repo_token: "${{ secrets.GITHUB_TOKEN }}"
           prerelease: true
