@@ -28,6 +28,8 @@
 //#define DEBUG  //comment out this line when not debugging
 #include "include/module_debug.h"
 
+#define U64_2XU32(val)  ((u32*)val)[1], ((u32*)val)[0]
+
 fatfs_fs_driver_mount_info fs_driver_mount_info[FF_VOLUMES];
 
 #define FATFS_FS_DRIVER_MOUNT_INFO_MAX ((int)(sizeof(fs_driver_mount_info) / sizeof(fs_driver_mount_info[0])))
@@ -258,6 +260,24 @@ static DIR *fs_find_free_dir_structure(void)
         }
     }
     return NULL;
+}
+
+//---------------------------------------------------------------------------
+static int fs_dummy(void)
+{
+    M_DEBUG("%s\n", __func__);
+
+    return -5;
+}
+
+//---------------------------------------------------------------------------
+static int fs_init(iop_device_t *driver)
+{
+    M_DEBUG("%s\n", __func__);
+
+    (void)driver;
+
+    return 1;
 }
 
 //---------------------------------------------------------------------------
@@ -619,11 +639,9 @@ static int get_frag_list(FIL *file, void *rdata, unsigned int rdatalen)
             // Fragment or file end
             M_DEBUG("fragment: %uc - %uc + 1\n", iClusterStart, iClusterCurrent + 1);
             if (iFragCount < iMaxFragments) {
-                u64 sector = clst2sect(file->obj.fs, iClusterStart) + bd->sectorOffset;
-                f[iFragCount].sector = sector;
+                f[iFragCount].sector = clst2sect(file->obj.fs, iClusterStart) + bd->sectorOffset;
                 f[iFragCount].count  = clst2sect(file->obj.fs, iClusterCurrent) - clst2sect(file->obj.fs, iClusterStart) + file->obj.fs->csize;
-                DEBUG_U64_2XU32(sector);
-                M_DEBUG(" - sectors: 0x%08x%08x count %u\n", sector_u32[1], sector_u32[0], f[iFragCount].count);
+                M_DEBUG(" - sectors: 0x%08x%08x count %u\n", U64_2XU32(&f[iFragCount].sector), f[iFragCount].count);
             }
             iFragCount++;
             iClusterStart = iClusterNext;
@@ -782,33 +800,33 @@ static int fs_devctl(iop_file_t *fd, const char *name, int cmd, void *arg, unsig
 }
 
 static iop_device_ops_t fs_functarray = {
-    DUMMY_IMPLEMENTATION, // init
-    DUMMY_IMPLEMENTATION, // deinit
-    NOT_SUPPORTED, // format
-    &fs_open, // open
-    &fs_close, // close
-    &fs_read, // read
-    &fs_write, // write
-    &fs_lseek, // lseek
-    &fs_ioctl, // ioctl
-    &fs_remove, // remove
-    &fs_mkdir, // mkdir
-    &fs_remove, // rmdir
-    &fs_dopen, // dopen
-    &fs_dclose, // dclose
-    &fs_dread, // dread
-    &fs_getstat, // getstat
-    NOT_SUPPORTED, // chstat
-    &fs_rename, // rename
-    NOT_SUPPORTED, // chdir
-    NOT_SUPPORTED, // sync
-    NOT_SUPPORTED, // mount
-    NOT_SUPPORTED, // umount
-    &fs_lseek64, // lseek64
-    &fs_devctl, // devctl
-    NOT_SUPPORTED, // symlink
-    NOT_SUPPORTED, // readlink
-    &fs_ioctl2, // ioctl2
+    &fs_init,
+    (void *)&fs_dummy,
+    (void *)&fs_dummy,
+    &fs_open,
+    &fs_close,
+    &fs_read,
+    &fs_write,
+    &fs_lseek,
+    &fs_ioctl,
+    &fs_remove,
+    &fs_mkdir,
+    &fs_remove,
+    &fs_dopen,
+    &fs_dclose,
+    &fs_dread,
+    &fs_getstat,
+    (void *)&fs_dummy,
+    &fs_rename,
+    (void *)&fs_dummy,
+    (void *)&fs_dummy,
+    (void *)&fs_dummy,
+    (void *)&fs_dummy,
+    &fs_lseek64,
+    &fs_devctl,
+    (void *)&fs_dummy,
+    (void *)&fs_dummy,
+    &fs_ioctl2,
 };
 static iop_device_t fs_driver = {
     "mass",
