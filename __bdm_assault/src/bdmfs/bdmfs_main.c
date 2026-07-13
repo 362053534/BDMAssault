@@ -15,7 +15,7 @@
 #define MAJOR_VER 1
 #define MINOR_VER 4
 
-// IRX_ID("bdmff", MAJOR_VER, MINOR_VER); //because were fusing two IRX
+// This component shares an IRX with the BDM block-device manager.
 
 static struct file_system g_fs = {
     .priv = NULL,

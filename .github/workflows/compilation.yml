@@ -1,0 +1,34 @@
+name: CI-compile
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  repository_dispatch:
+    types: [run_build]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/ps2homebrew@sha256:7df074b3007f918b81f911e8b21fce1f297eff73ca03508064651ce2c8713570
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Compile BDM Assault IRX modules
+        run: |
+          make -C libbdm clean all
+          make -C __bdm_assault clean all
+          make -C __usbd_bd_assault clean all
+
+      - name: Upload IRX artifacts
+        if: ${{ success() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: BDMAssault
+          if-no-files-found: error
+          path: |
+            bdm_assault.irx
+            usbd_bd_assault.irx
