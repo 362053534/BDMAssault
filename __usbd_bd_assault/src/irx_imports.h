@@ -17,15 +17,12 @@
 
 /* Please keep these in alphabetical order!  */
 #include <bdm.h>
-#include "intrman.h"
+#include <dev9.h>
 #include "loadcore.h"
+#include <modload.h>
 #include "stdio.h"
 #include "sysclib.h"
-#include "sysmem.h"
 #include "thbase.h"
 #include "thevent.h"
-#include "thmsgbx.h"
-#include "thsemap.h"
-#include "vblank.h"
 
 #endif /* IOP_IRX_IMPORTS_H */

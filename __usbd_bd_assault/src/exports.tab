@@ -1,23 +1,27 @@
-/*USBD_EXPORTS they remain as is because USBMASS_BD has no export*/
-
-DECLARE_EXPORT_TABLE(usbd, 1, 1)
+/* Keep the standard ATAD export ABI. _start and _exit are supplied by the
+ * BDM HDD wrapper in usbd_usbd.c; ATA service exports come from ps2atad.c. */
+DECLARE_EXPORT_TABLE(atad, 1, 3)
 	DECLARE_EXPORT(_start)
 	DECLARE_EXPORT(_retonly)
+	DECLARE_EXPORT(_exit)
 	DECLARE_EXPORT(_retonly)
-	DECLARE_EXPORT(_retonly)
-	DECLARE_EXPORT(sceUsbdRegisterLdd)
-/*05*/	DECLARE_EXPORT(sceUsbdUnregisterLdd)
-	DECLARE_EXPORT(sceUsbdScanStaticDescriptor)
-	DECLARE_EXPORT(sceUsbdSetPrivateData)
-	DECLARE_EXPORT(sceUsbdGetPrivateData)
-	DECLARE_EXPORT(sceUsbdOpenPipe)
-/*10*/	DECLARE_EXPORT(sceUsbdClosePipe)
-	DECLARE_EXPORT(sceUsbdTransferPipe)
-	DECLARE_EXPORT(sceUsbdOpenPipeAligned)
-	DECLARE_EXPORT(sceUsbdGetDeviceLocation)
-	DECLARE_EXPORT(sceUsbdRegisterAutoloader)
-/*15*/	DECLARE_EXPORT(sceUsbdUnregisterAutoloader)
-	DECLARE_EXPORT(sceUsbdChangeThreadPriority)
+
+	DECLARE_EXPORT(sceAtaInit)
+/*05*/ DECLARE_EXPORT(sceAtaSoftReset)
+	DECLARE_EXPORT(sceAtaExecCmd)
+	DECLARE_EXPORT(sceAtaWaitResult)
+	DECLARE_EXPORT(sceAtaGetError)
+	DECLARE_EXPORT(sceAtaDmaTransfer)
+/*10*/ DECLARE_EXPORT(sceAtaSecuritySetPassword)
+	DECLARE_EXPORT(sceAtaSecurityUnLock)
+	DECLARE_EXPORT(sceAtaSecurityEraseUnit)
+	DECLARE_EXPORT(sceAtaIdle)
+	DECLARE_EXPORT(sceAtaGetSceId)
+/*15*/ DECLARE_EXPORT(sceAtaSmartReturnStatus)
+	DECLARE_EXPORT(sceAtaSmartSaveAttr)
+	DECLARE_EXPORT(sceAtaFlushCache)
+	DECLARE_EXPORT(sceAtaIdleImmediate)
+	DECLARE_EXPORT(ata_device_sector_io64)
 END_EXPORT_TABLE
 
 void _retonly() {}
