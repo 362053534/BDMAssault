@@ -8,15 +8,25 @@
 # Review ps2sdk README & LICENSE files for further details.
 #
 # Defines all IRX imports.
+#
+# Note: DEV9 is linked into this IRX — do not import the "dev9" library.
+# ATAD calls DEV9 symbols by direct linkage. BDM comes from usbd.irx.
 */
 
 #ifndef IOP_IRX_IMPORTS_H
 #define IOP_IRX_IMPORTS_H
 
-#include "irx.h"
+#include <irx.h>
 
-/* Please keep these in alphabetical order!  */
-#include <modload.h>
-#include "stdio.h"
+#include <bdm.h>
+#include <dmacman.h>
+#include <intrman.h>
+#include <iomanX.h>
+#include <loadcore.h>
+#include <stdio.h>
+#include <sysclib.h>
+#include <thbase.h>
+#include <thevent.h>
+#include <thsemap.h>
 
 #endif /* IOP_IRX_IMPORTS_H */

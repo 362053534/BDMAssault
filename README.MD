@@ -11,6 +11,10 @@ To use this project you have to place the two IRX binaries provided at the [rele
 - `bdm_assault.irx` must be pasted into `mc?:/POPSTARTER/usbd.irx`
 - `usbd_bd_assault.irx` must be pasted into `mc?:/POPSTARTER/usbhdfsd.irx`
 
+On the ATA_TEST / BDM-HDD build, `usbd_bd_assault.irx` brings up internal HDD (DEV9+ATAD with BDM) instead of USB.
+Both files are still required: `usbd.irx` provides BDM + `mass:` (exFAT), `usbhdfsd.irx` attaches the ATA disk.
+The HDD must be MBR/GPT + FAT/exFAT (not APA-only). USB mass is not available in that build.
+
 ### FreeMcBoot
 - `bdm_assault.irx` must be pasted into `mc?:/SYS-CONF/USBD.IRX`
 - `usbd_bd_assault.irx` must be pasted into `mc?:/SYS-CONF/USBHDFSD.IRX`
