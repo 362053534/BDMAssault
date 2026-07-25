@@ -36,7 +36,8 @@
 #define MODNAME    "dev9"
 #define DRIVERNAME "dev9"
 // This is version from last SDK 3.1.0
-IRX_ID(MODNAME, 2, 8);
+// 合进 usbd_bd_assault 时由外壳提供唯一 IRX_ID，避免 _irx_id 重复定义
+//IRX_ID(MODNAME, 2, 8);
 
 #define M_PRINTF(format, args...) \
     printf(MODNAME ": " format, ##args)

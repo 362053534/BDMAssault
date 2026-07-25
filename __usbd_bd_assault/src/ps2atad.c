@@ -48,7 +48,8 @@
 // TODO: last sdk 3.1.0 has ATAD module version 2.9 with significant changes.
 // Check what was changed, and maybe port changes.
 // CRC32: C2337807
-IRX_ID(MODNAME, 2, 7);
+// 合进 usbd_bd_assault 时由外壳提供唯一 IRX_ID，避免 _irx_id 重复定义
+//IRX_ID(MODNAME, 2, 7);
 
 #define M_PRINTF(format, args...) \
     printf(MODNAME ": " format, ##args)
