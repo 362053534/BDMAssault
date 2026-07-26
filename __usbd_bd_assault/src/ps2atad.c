@@ -373,14 +373,20 @@ int _start(int argc, char *argv[])
         }
     }
 
-    sceAtaInit(0);
-    sceAtaInit(1);
-#endif
-
+    /* 必须在bdm_connect_bd之前注册，失败则不要把BD挂进BDM */
     if (RegisterLibraryEntries(&_exp_atad) != 0) {
         M_PRINTF("Library is already registered, exiting.\n");
         goto out;
     }
+
+    sceAtaInit(0);
+    sceAtaInit(1);
+#else
+    if (RegisterLibraryEntries(&_exp_atad) != 0) {
+        M_PRINTF("Library is already registered, exiting.\n");
+        goto out;
+    }
+#endif
 
     res = MODULE_RESIDENT_END;
     M_PRINTF("Driver loaded.\n");
