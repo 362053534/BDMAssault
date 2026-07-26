@@ -192,6 +192,110 @@ static void fatfs_fs_driver_stop_all_bd(void)
     }
 }
 
+/* 检查指定mass单元根目录是否存在POPS文件夹 */
+static int fatfs_fs_driver_volume_has_pops(int mount_info_index)
+{
+    DIR dir;
+    char path[16];
+    FRESULT res;
+
+    if (mount_info_index < 0 || mount_info_index >= FATFS_FS_DRIVER_MOUNT_INFO_MAX)
+        return 0;
+    if (fs_driver_mount_info[mount_info_index].mounted_bd == NULL)
+        return 0;
+
+    path[0] = '0' + mount_info_index;
+    path[1] = ':';
+    path[2] = '/';
+    path[3] = 'P';
+    path[4] = 'O';
+    path[5] = 'P';
+    path[6] = 'S';
+    path[7] = '\0';
+
+    res = f_opendir(&dir, path);
+    if (res == FR_OK) {
+        f_closedir(&dir);
+        return 1;
+    }
+    return 0;
+}
+
+/* 将含POPS/的卷换到mass0，供POPS的mass:路径使用 */
+static void fatfs_fs_driver_promote_pops_to_mass0(int pops_index)
+{
+    struct block_device *pops_bd;
+    struct block_device *mass0_bd;
+
+    if (pops_index <= 0 || pops_index >= FATFS_FS_DRIVER_MOUNT_INFO_MAX)
+        return;
+
+    pops_bd = fs_driver_mount_info[pops_index].mounted_bd;
+    mass0_bd = fs_driver_mount_info[0].mounted_bd;
+    if (!pops_bd)
+        return;
+
+    fatfs_fs_driver_unmount_bd(pops_index);
+    if (mass0_bd)
+        fatfs_fs_driver_unmount_bd(0);
+
+    if (fatfs_fs_driver_mount_bd(0, pops_bd) != FR_OK) {
+        /* 提升失败则尽量恢复原挂载顺序 */
+        if (mass0_bd)
+            fatfs_fs_driver_mount_bd(0, mass0_bd);
+        fatfs_fs_driver_mount_bd(pops_index, pops_bd);
+        return;
+    }
+
+    if (mass0_bd) {
+        if (fatfs_fs_driver_mount_bd(pops_index, mass0_bd) != FR_OK) {
+            printf("BDM_ASSAULT: remount previous mass0 to mass%d failed\n", pops_index);
+        }
+    }
+
+    printf("BDM_ASSAULT: promoted POPS volume to mass0 (was mass%d)\n", pops_index);
+}
+
+/* 等待POPS卷出现在mass0（含异步挂载与提升），超时返回-1 */
+int fatfs_wait_pops_mass0(unsigned int timeout_us)
+{
+    unsigned int waited;
+    int i;
+    struct block_device *bd;
+
+    for (waited = 0; waited < timeout_us; waited += 50000) {
+        _fs_lock();
+
+        if (fatfs_fs_driver_volume_has_pops(0)) {
+            _fs_unlock();
+            printf("BDM_ASSAULT: mass0:/POPS ready (%u ms)\n", waited / 1000);
+            return 0;
+        }
+
+        /* 补扫：若POPS已在其它ATA卷则提升到mass0 */
+        for (i = 1; i < FATFS_FS_DRIVER_MOUNT_INFO_MAX; i++) {
+            bd = fs_driver_mount_info[i].mounted_bd;
+            if (bd && bd->name && strcmp(bd->name, "ata") == 0 &&
+                fatfs_fs_driver_volume_has_pops(i)) {
+                fatfs_fs_driver_promote_pops_to_mass0(i);
+                break;
+            }
+        }
+
+        if (fatfs_fs_driver_volume_has_pops(0)) {
+            _fs_unlock();
+            printf("BDM_ASSAULT: mass0:/POPS ready after promote (%u ms)\n", waited / 1000);
+            return 0;
+        }
+
+        _fs_unlock();
+        DelayThread(50000);
+    }
+
+    printf("BDM_ASSAULT: mass0:/POPS not ready after %u ms\n", timeout_us / 1000);
+    return -1;
+}
+
 int connect_bd(struct block_device *bd)
 {
     int mount_info_index;
@@ -203,6 +307,12 @@ int connect_bd(struct block_device *bd)
     if (mount_info_index != -1) {
         M_DEBUG("connect_bd: trying to mount to index %d\n", mount_info_index);
         if (fatfs_fs_driver_mount_bd(mount_info_index, bd) == FR_OK) {
+            /* 仅处理ATA卷，避免误提升其它块设备 */
+            if (bd->name && strcmp(bd->name, "ata") == 0 &&
+                fatfs_fs_driver_volume_has_pops(mount_info_index)) {
+                if (mount_info_index != 0 && !fatfs_fs_driver_volume_has_pops(0))
+                    fatfs_fs_driver_promote_pops_to_mass0(mount_info_index);
+            }
             _fs_unlock();
             return 0;
         }
