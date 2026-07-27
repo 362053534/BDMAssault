@@ -43,7 +43,7 @@ static void fatfs_dbg_mark_usbd_loaded(void)
     for (i = 0; i < 4; i++) {
         fd = open(paths[i], FIO_O_WRONLY | FIO_O_CREAT | FIO_O_TRUNC);
         if (fd >= 0) {
-            write(fd, msg, sizeof(msg) - 1);
+            write(fd, (void *)msg, sizeof(msg) - 1);
             close(fd);
         }
     }
