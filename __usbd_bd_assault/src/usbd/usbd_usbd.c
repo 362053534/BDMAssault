@@ -11,8 +11,9 @@
 #include <loadcore.h>
 #include <stdio.h>
 #include <sysclib.h>
-#include <iomanX.h>
+#include <ioman.h>
 #include <io_common.h>
+#include <thbase.h>
 #include <bdm.h>
 
 #define MODNAME "bdm_hdd"
@@ -20,11 +21,12 @@ IRX_ID(MODNAME, 1, 1);
 
 /* FatFs挂载在BDM线程异步完成；等到mass0出现POPS/或超时 */
 #define BDM_HDD_POPS_WAIT_TOTAL_US (30000000)
+#define BDM_HDD_POPS_WAIT_STEP_US  (50000)
 
 extern int dev9_start(int argc, char *argv[]);
 extern int atad_start(int argc, char *argv[]);
 
-/* 累积调试日志，每次整文件写到MC（便于实机事后查看） */
+/* 累积调试日志；用ioman写MC（与USBD_DBG同一路径，避免依赖iomanX） */
 static char g_ata_dbg[512];
 
 static void ata_dbg_flush(void)
@@ -44,11 +46,10 @@ static void ata_dbg_flush(void)
         return;
 
     for (i = 0; i < 4; i++) {
-        /* iomanX的open在CREAT时必须带mode，否则会读到垃圾参数导致失败 */
-        fd = iomanX_open(paths[i], FIO_O_WRONLY | FIO_O_CREAT | FIO_O_TRUNC, 0666);
+        fd = open(paths[i], FIO_O_WRONLY | FIO_O_CREAT | FIO_O_TRUNC);
         if (fd >= 0) {
-            iomanX_write(fd, g_ata_dbg, len);
-            iomanX_close(fd);
+            write(fd, g_ata_dbg, len);
+            close(fd);
         }
     }
 }
@@ -68,6 +69,38 @@ static void ata_dbg_line(const char *line)
 
     memcpy(g_ata_dbg + used, line, add + 1);
     ata_dbg_flush();
+}
+
+/* 用ioman探测mass:/POPS；提升仍由bdm_assault的connect_bd完成 */
+static int bdm_hdd_wait_pops_on_mass0(void)
+{
+    unsigned int waited;
+    int fd;
+    static const char *const pops_paths[] = {
+        "mass:/POPS",
+        "mass0:/POPS",
+        "mass:POPS",
+        "mass0:POPS",
+    };
+    int i;
+
+    for (waited = 0; waited < BDM_HDD_POPS_WAIT_TOTAL_US; waited += BDM_HDD_POPS_WAIT_STEP_US) {
+        for (i = 0; i < 4; i++) {
+            fd = dopen(pops_paths[i], FIO_O_RDONLY);
+            if (fd >= 0) {
+                dclose(fd);
+                ata_dbg_line("POPS_OK\n");
+                printf("BDM HDD Assault: mass POPS ready (%u ms)\n", waited / 1000);
+                return 0;
+            }
+        }
+        DelayThread(BDM_HDD_POPS_WAIT_STEP_US);
+    }
+
+    ata_dbg_line("POPS_TIMEOUT\n");
+    printf("BDM HDD Assault: mass POPS not ready after %u ms\n",
+           BDM_HDD_POPS_WAIT_TOTAL_US / 1000);
+    return -1;
 }
 
 int _start(int argc, char *argv[])
@@ -103,11 +136,7 @@ int _start(int argc, char *argv[])
     ata_dbg_line("WAIT_POPS\n");
 
     /* 等待含POPS/的ATA卷挂上并提升到mass0（总超时30秒） */
-    result = fatfs_wait_pops_mass0(BDM_HDD_POPS_WAIT_TOTAL_US);
-    if (result == 0)
-        ata_dbg_line("POPS_OK\n");
-    else
-        ata_dbg_line("POPS_TIMEOUT\n");
+    bdm_hdd_wait_pops_on_mass0();
 
     ata_dbg_line("READY\n");
     printf("BDM HDD Assault: ready\n");

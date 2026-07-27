@@ -17,6 +17,8 @@
 #include <defs.h>
 #include <loadcore.h>
 #include <intrman.h>
+/* 保留iop_device_t别名，但AddDrv使用iomanX_前缀以免和ioman冲突 */
+#define IOMANX_OLD_NAME_ADDDELDRV 0
 #include <iomanX.h>
 #include <dmacman.h>
 #include <thbase.h>
@@ -260,8 +262,8 @@ int _start(int argc, char *argv[])
     if (res)
         return res;
 
-    DelDrv(dev9x_device.name);
-    if (AddDrv(&dev9x_device) != 0) {
+    iomanX_DelDrv(dev9x_device.name);
+    if (iomanX_AddDrv(&dev9x_device) != 0) {
         return MODULE_NO_RESIDENT_END;
     }
 

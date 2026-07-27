@@ -21,7 +21,11 @@
 #include <bdm.h>
 #include <dmacman.h>
 #include <intrman.h>
+/* 与ioman并存时关闭AddDrv改名，避免和ioman的AddDrv/open冲突 */
+#define IOMANX_OLD_NAME_ADDDELDRV 0
+#define IOMANX_OLD_NAME_COMPATIBILITY 0
 #include <iomanX.h>
+#include <ioman.h>
 #include <loadcore.h>
 #include <stdio.h>
 #include <sysclib.h>
