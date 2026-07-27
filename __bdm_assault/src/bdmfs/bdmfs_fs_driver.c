@@ -256,17 +256,88 @@ static void fatfs_fs_driver_promote_pops_to_mass0(int pops_index)
     printf("BDM_ASSAULT: promoted POPS volume to mass0 (was mass%d)\n", pops_index);
 }
 
+/* 在指定mass单元写入调试标记文件（实机无日志时用） */
+static void fatfs_dbg_write_file(int mount_info_index, const char *relpath, const char *content)
+{
+    FIL fil;
+    char path[40];
+    UINT bw;
+    int clen;
+
+    if (mount_info_index < 0 || mount_info_index >= FATFS_FS_DRIVER_MOUNT_INFO_MAX)
+        return;
+    if (fs_driver_mount_info[mount_info_index].mounted_bd == NULL)
+        return;
+    if (!relpath || !content)
+        return;
+
+    path[0] = '0' + mount_info_index;
+    path[1] = ':';
+    path[2] = '/';
+    strncpy(path + 3, relpath, sizeof(path) - 4);
+    path[sizeof(path) - 1] = '\0';
+
+    if (f_open(&fil, path, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK)
+        return;
+
+    clen = strlen(content);
+    f_write(&fil, content, clen, &bw);
+    f_close(&fil);
+}
+
+/* 任一只ATA卷挂上时写mass:/_ATA_MOUNT.OK */
+static void fatfs_dbg_mark_ata_mounted(void)
+{
+    int i;
+    struct block_device *bd;
+    char body[32];
+    int count;
+
+    count = 0;
+    for (i = 0; i < FATFS_FS_DRIVER_MOUNT_INFO_MAX; i++) {
+        bd = fs_driver_mount_info[i].mounted_bd;
+        if (bd && bd->name && strcmp(bd->name, "ata") == 0)
+            count++;
+    }
+    if (count <= 0)
+        return;
+
+    sprintf(body, "MASS_N=%d\n", count);
+    for (i = 0; i < FATFS_FS_DRIVER_MOUNT_INFO_MAX; i++) {
+        bd = fs_driver_mount_info[i].mounted_bd;
+        if (bd && bd->name && strcmp(bd->name, "ata") == 0)
+            fatfs_dbg_write_file(i, "_ATA_MOUNT.OK", body);
+    }
+}
+
 /* 等待POPS卷出现在mass0（含异步挂载与提升），超时返回-1 */
 int fatfs_wait_pops_mass0(unsigned int timeout_us)
 {
     unsigned int waited;
     int i;
     struct block_device *bd;
+    int marked_mount;
+    char body[48];
+
+    marked_mount = 0;
 
     for (waited = 0; waited < timeout_us; waited += 50000) {
         _fs_lock();
 
+        if (!marked_mount) {
+            for (i = 0; i < FATFS_FS_DRIVER_MOUNT_INFO_MAX; i++) {
+                bd = fs_driver_mount_info[i].mounted_bd;
+                if (bd && bd->name && strcmp(bd->name, "ata") == 0) {
+                    fatfs_dbg_mark_ata_mounted();
+                    marked_mount = 1;
+                    break;
+                }
+            }
+        }
+
         if (fatfs_fs_driver_volume_has_pops(0)) {
+            sprintf(body, "OK %u ms\n", waited / 1000);
+            fatfs_dbg_write_file(0, "POPS/_WAIT.OK", body);
             _fs_unlock();
             printf("BDM_ASSAULT: mass0:/POPS ready (%u ms)\n", waited / 1000);
             return 0;
@@ -283,6 +354,8 @@ int fatfs_wait_pops_mass0(unsigned int timeout_us)
         }
 
         if (fatfs_fs_driver_volume_has_pops(0)) {
+            sprintf(body, "OK promote %u ms\n", waited / 1000);
+            fatfs_dbg_write_file(0, "POPS/_WAIT.OK", body);
             _fs_unlock();
             printf("BDM_ASSAULT: mass0:/POPS ready after promote (%u ms)\n", waited / 1000);
             return 0;
@@ -291,6 +364,20 @@ int fatfs_wait_pops_mass0(unsigned int timeout_us)
         _fs_unlock();
         DelayThread(50000);
     }
+
+    /* 超时：若已挂上ATA则留下失败标记 */
+    _fs_lock();
+    if (!marked_mount)
+        fatfs_dbg_mark_ata_mounted();
+    sprintf(body, "TIMEOUT %u ms\n", timeout_us / 1000);
+    for (i = 0; i < FATFS_FS_DRIVER_MOUNT_INFO_MAX; i++) {
+        bd = fs_driver_mount_info[i].mounted_bd;
+        if (bd && bd->name && strcmp(bd->name, "ata") == 0)
+            fatfs_dbg_write_file(i, "_ATA_TIMEOUT.TXT", body);
+    }
+    if (fs_driver_mount_info[0].mounted_bd)
+        fatfs_dbg_write_file(0, "_ATA_TIMEOUT.TXT", body);
+    _fs_unlock();
 
     printf("BDM_ASSAULT: mass0:/POPS not ready after %u ms\n", timeout_us / 1000);
     return -1;
