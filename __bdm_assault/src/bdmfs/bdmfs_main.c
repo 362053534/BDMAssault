@@ -4,6 +4,9 @@
 #include <loadcore.h>
 #include <stdio.h>
 #include <sysmem.h>
+#include <sysclib.h>
+#include <ioman.h>
+#include <io_common.h>
 #include <cdvdman.h>
 
 #include "include/ff.h"
@@ -24,6 +27,28 @@ static struct file_system g_fs = {
     .disconnect_bd = disconnect_bd,
 };
 
+/* usbd.irx加载时先打点，用于确认POPStarter是否加载了bdm_assault */
+static void fatfs_dbg_mark_usbd_loaded(void)
+{
+    static const char *const paths[] = {
+        "mc0:POPSTARTER/USBD_DBG.TXT",
+        "mc0:/POPSTARTER/USBD_DBG.TXT",
+        "mc1:POPSTARTER/USBD_DBG.TXT",
+        "mc1:/POPSTARTER/USBD_DBG.TXT",
+    };
+    static const char msg[] = "USBD_OK\nbdm_assault loaded\n";
+    int i;
+    int fd;
+
+    for (i = 0; i < 4; i++) {
+        fd = open(paths[i], FIO_O_WRONLY | FIO_O_CREAT | FIO_O_TRUNC);
+        if (fd >= 0) {
+            write(fd, msg, sizeof(msg) - 1);
+            close(fd);
+        }
+    }
+}
+
 int bdmfs_fatfs_start(int argc, char *argv[])
 {
     (void)argc;
@@ -39,6 +64,8 @@ int bdmfs_fatfs_start(int argc, char *argv[])
 
     // Connect to block device manager
     bdm_connect_fs(&g_fs);
+
+    fatfs_dbg_mark_usbd_loaded();
 
     // return resident
     return MODULE_RESIDENT_END;
