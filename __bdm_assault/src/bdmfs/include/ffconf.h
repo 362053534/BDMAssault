@@ -292,7 +292,7 @@
 */
 
 
-#define FF_FS_MBR 0
+#define FF_FS_MBR 1
 /* This option switches support for MBR partition table. (0:Disable or 1:Enable) */
 
 /*--- End of configuration options ---*/
