@@ -1,6 +1,6 @@
 
-# 成品名：输出 usbd_bdmhdd.irx（由 OPL 等调用方按约定加载/映射）
-IOP_BIN = ../usbd_bdmhdd.irx
+# 成品名：输出 usbd.irx（由 OPL 等调用方按约定加载/映射）
+IOP_BIN = ../usbd.irx
 
 
 #bdm
@@ -15,7 +15,7 @@ IOP_LIBS += -static-libgcc -lgcc
 IOP_OBJS = $(addprefix bdm_,$(BDM_OBJS)) $(addprefix bdmfs_,$(BDMFS_FATFS_OBJS)) imports.o exports.o
 ifeq ($(DEBUG), 1)
   IOP_CFLAGS += -DDEBUG -DDEBUG_EXTREME
-  IOP_BIN = ../usbd_bdmhdd_debug.irx
+  IOP_BIN = ../usbd_debug.irx
 endif
 include ../global.make
 IOP_SRC_DIR =

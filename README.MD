@@ -8,23 +8,23 @@ To use this project you have to place the two IRX binaries provided at the [rele
 
 
 ### POPStarter
-- `usbd_bdmhdd.irx` → 由 OPL 等调用方按约定加载（内部再映射到对应槽位）
+- `usbd.irx` → 由 OPL 等调用方按约定加载（内部再映射到对应槽位）
 - `bdmhdd.irx` → 由 OPL 等调用方按约定加载（内部再映射到对应槽位）
 
 On the ATA_TEST / BDM-HDD build, `bdmhdd.irx` brings up internal HDD (DEV9+ATAD with BDM) instead of USB.
-Both files are still required: `usbd_bdmhdd.irx` provides BDM + `mass:` (exFAT), `bdmhdd.irx` attaches the ATA disk.
+Both files are still required: `usbd.irx` provides BDM + `mass:` (exFAT), `bdmhdd.irx` attaches the ATA disk.
 The HDD must be MBR/GPT + FAT/exFAT (not APA-only). USB mass is not available in that build.
 
 ### FreeMcBoot
-- `usbd_bdmhdd.irx` → 由调用方按约定放置/映射
+- `usbd.irx` → 由调用方按约定放置/映射
 - `bdmhdd.irx` → 由调用方按约定放置/映射
 
 ### FreeHdBoot
-- `usbd_bdmhdd.irx` → 由调用方按约定放置/映射
+- `usbd.irx` → 由调用方按约定放置/映射
 - `bdmhdd.irx` → 由调用方按约定放置/映射
 
 ### old wLaunchELF versions
-- `usbd_bdmhdd.irx` / `bdmhdd.irx` → 由调用方按约定放置/映射
+- `usbd.irx` / `bdmhdd.irx` → 由调用方按约定放置/映射
 
 ### Any other homebrew
 - find out by yourself. I cant remember any other.
