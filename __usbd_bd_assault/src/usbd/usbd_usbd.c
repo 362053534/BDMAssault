@@ -57,9 +57,7 @@ static void ata_dbg_flush(void)
         "mc1:POPSTARTER/ATA_DBG.TXT",
         "mc1:/POPSTARTER/ATA_DBG.TXT",
     };
-    char path[24];
     int i;
-    int unit;
     int fd;
     int len;
 
@@ -67,24 +65,9 @@ static void ata_dbg_flush(void)
     if (len <= 0)
         return;
 
-    /* 先写MC：mass未就绪时也能看到START/DEV9/ATAD阶段 */
+    /* 只写MC：BDM挂载未完成时open(mass:)可能与FatFs锁死锁，表现为停在ATAW=1 */
     for (i = 0; i < 4; i++) {
         fd = open(mc_paths[i], FIO_O_WRONLY | FIO_O_CREAT | FIO_O_TRUNC);
-        if (fd >= 0) {
-            write(fd, g_ata_dbg, len);
-            close(fd);
-        }
-    }
-
-    fd = open("mass:/ATA_DBG.TXT", FIO_O_WRONLY | FIO_O_CREAT | FIO_O_TRUNC);
-    if (fd >= 0) {
-        write(fd, g_ata_dbg, len);
-        close(fd);
-    }
-
-    for (unit = 0; unit < BDM_HDD_MASS_MAX; unit++) {
-        bdm_hdd_make_mass_path(path, unit, "ATA_DBG.TXT");
-        fd = open(path, FIO_O_WRONLY | FIO_O_CREAT | FIO_O_TRUNC);
         if (fd >= 0) {
             write(fd, g_ata_dbg, len);
             close(fd);
@@ -281,7 +264,10 @@ static int bdm_hdd_wait_pops_on_mass0(void)
     int unit;
     int found;
     int promoted;
+    int parts;
     char seen_line[8];
+    struct block_device *bds[BDM_HDD_BD_MAX];
+    int i;
 
     /* 给BDM异步挂载一点时间后再采样块设备 */
     DelayThread(BDM_HDD_MOUNT_SETTLE_US * 2);
@@ -289,7 +275,20 @@ static int bdm_hdd_wait_pops_on_mass0(void)
 
     promoted = 0;
     for (waited = 0; waited < BDM_HDD_POPS_WAIT_TOTAL_US; waited += BDM_HDD_POPS_WAIT_STEP_US) {
-        /* 轮询已挂上的mass，首次发现时记日志并刷到MC+mass */
+        /* 先数分区；ATAP=0时不要dopen(mass:)，避免踩到卡住的挂载路径 */
+        parts = 0;
+        memset(bds, 0, sizeof(bds));
+        bdm_get_bd(bds, BDM_HDD_BD_MAX);
+        for (i = 0; i < BDM_HDD_BD_MAX; i++) {
+            if (bds[i] && bds[i]->name && strcmp(bds[i]->name, "ata") == 0 && bds[i]->parNr != 0)
+                parts++;
+        }
+
+        if (parts <= 0) {
+            DelayThread(BDM_HDD_POPS_WAIT_STEP_US);
+            continue;
+        }
+
         for (unit = 0; unit < BDM_HDD_MASS_MAX; unit++) {
             if (!g_mass_seen[unit] && bdm_hdd_mass_ready(unit)) {
                 g_mass_seen[unit] = 1;

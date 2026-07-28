@@ -226,7 +226,7 @@ int bdm_init()
     ThreadData.thread    = bdm_thread;
     ThreadData.option    = 0;
     ThreadData.priority  = 0x30;   // Low priority
-    ThreadData.stacksize = 0x1000; // 4KiB
+    ThreadData.stacksize = 0x4000; // 16KiB：FatFs LFN在栈上，原4KiB易溢出
     result = bdm_thread_id = CreateThread(&ThreadData);
     if (result < 0) {
         M_DEBUG("ERROR: CreateThread %d\n", result);
