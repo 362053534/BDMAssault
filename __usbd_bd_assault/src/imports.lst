@@ -49,13 +49,10 @@ I_CpuSuspendIntr
 I_CpuResumeIntr
 intrman_IMPORTS_end
 
-/* MC调试与DEV9设备注册均走rom0:ioman（不依赖iomanX） */
+/* DEV9注册与mass探测均走rom0:ioman */
 ioman_IMPORTS_start
 I_AddDrv
 I_DelDrv
-I_open
-I_close
-I_write
 I_dopen
 I_dclose
 ioman_IMPORTS_end
