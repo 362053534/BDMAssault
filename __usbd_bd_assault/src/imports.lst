@@ -48,7 +48,7 @@ I_CpuSuspendIntr
 I_CpuResumeIntr
 intrman_IMPORTS_end
 
-/* DEV9 AddDrv走iomanX；MC/mass探测走ioman（与USBD_DBG一致） */
+/* DEV9 AddDrv走iomanX；mass探测/调试日志走ioman */
 iomanX_IMPORTS_start
 I_iomanX_AddDrv
 I_iomanX_DelDrv
