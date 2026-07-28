@@ -17,9 +17,8 @@
 #include <defs.h>
 #include <loadcore.h>
 #include <intrman.h>
-/* 保留iop_device_t别名，但AddDrv使用iomanX_前缀以免和ioman冲突 */
-#define IOMANX_OLD_NAME_ADDDELDRV 0
-#include <iomanX.h>
+/* POPStarter重启IOP后通常只有rom0:ioman，无iomanX；硬依赖iomanX会导致LoadModule在_start前失败 */
+#include <ioman.h>
 #include <dmacman.h>
 #include <thbase.h>
 #include <thsemap.h>
@@ -125,65 +124,38 @@ static int expbay_init(int sema_attr);
 
 extern struct irx_export_table _exp_dev9;
 
-static int dev9x_devctl(iop_file_t *f, const char *name, int cmd, void *args, unsigned int arglen, void *buf, unsigned int buflen)
+/* 仅用经典ioman设备表注册占位驱动（ATAD经直接链接用DEV9，不依赖devctl） */
+static int dev9x_dev_ok(iop_device_t *d)
 {
-    (void)f;
-    (void)name;
-    (void)arglen;
-    (void)buf;
-    (void)buflen;
-    switch (cmd) {
-        case DDIOC_MODEL:
-            return dev9type;
-        case DDIOC_OFF:
-            Dev9CardStop();
-            return 0;
-        case DDIOC_SETPIO3:
-            dev9ControlPIO3(((u32 *)args)[0]);
-            return 0;
-        case DDIOC_LED2CTL:
-            dev9LED2Ctl(((u32 *)args)[0]);
-            return 0;
-        default:
-            return 0;
-    }
+    (void)d;
+    return 0;
 }
 
 static iop_device_ops_t dev9x_ops =
     {
-        DUMMY_IMPLEMENTATION, // init
-        DUMMY_IMPLEMENTATION, // deinit
-        NOT_SUPPORTED, // format
-        NOT_SUPPORTED, // open
-        NOT_SUPPORTED, // close
-        NOT_SUPPORTED, // read
-        NOT_SUPPORTED, // write
-        NOT_SUPPORTED, // lseek
-        NOT_SUPPORTED, // ioctl
-        NOT_SUPPORTED, // remove
-        NOT_SUPPORTED, // mkdir
-        NOT_SUPPORTED, // rmdir
-        NOT_SUPPORTED, // dopen
-        NOT_SUPPORTED, // dclose
-        NOT_SUPPORTED, // dread
-        NOT_SUPPORTED, // getstat
-        NOT_SUPPORTED, // chstat
-        NOT_SUPPORTED, // rename
-        NOT_SUPPORTED, // chdir
-        NOT_SUPPORTED, // sync
-        NOT_SUPPORTED, // mount
-        NOT_SUPPORTED, // umount
-        NOT_SUPPORTED_S64, // lseek64
-        &dev9x_devctl, // devctl
-        NOT_SUPPORTED, // symlink
-        NOT_SUPPORTED, // readlink
-        NOT_SUPPORTED, // ioctl2
+        &dev9x_dev_ok, // init
+        &dev9x_dev_ok, // deinit
+        (void *)-1, // format
+        (void *)-1, // open
+        (void *)-1, // close
+        (void *)-1, // read
+        (void *)-1, // write
+        (void *)-1, // lseek
+        (void *)-1, // ioctl
+        (void *)-1, // remove
+        (void *)-1, // mkdir
+        (void *)-1, // rmdir
+        (void *)-1, // dopen
+        (void *)-1, // dclose
+        (void *)-1, // dread
+        (void *)-1, // getstat
+        (void *)-1, // chstat
 };
 
 static iop_device_t dev9x_device =
     {
         "dev9x",
-        IOP_DT_FS | IOP_DT_FSEXT,
+        IOP_DT_FS,
         1,
         "DEV9",
         &dev9x_ops,
@@ -262,8 +234,8 @@ int _start(int argc, char *argv[])
     if (res)
         return res;
 
-    iomanX_DelDrv(dev9x_device.name);
-    if (iomanX_AddDrv(&dev9x_device) != 0) {
+    DelDrv(dev9x_device.name);
+    if (AddDrv(&dev9x_device) != 0) {
         return MODULE_NO_RESIDENT_END;
     }
 

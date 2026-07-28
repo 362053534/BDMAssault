@@ -48,13 +48,10 @@ I_CpuSuspendIntr
 I_CpuResumeIntr
 intrman_IMPORTS_end
 
-/* DEV9 AddDrv走iomanX；MC/mass调试与探测走ioman */
-iomanX_IMPORTS_start
-I_iomanX_AddDrv
-I_iomanX_DelDrv
-iomanX_IMPORTS_end
-
+/* MC调试与DEV9设备注册均走rom0:ioman（不依赖iomanX） */
 ioman_IMPORTS_start
+I_AddDrv
+I_DelDrv
 I_open
 I_close
 I_write
