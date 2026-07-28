@@ -17,6 +17,5 @@ extern int InitFS(void);
 extern int connect_bd(struct block_device *bd);
 extern void disconnect_bd(struct block_device *bd);
 extern struct block_device *fatfs_fs_driver_get_mounted_bd_from_index(int mount_info_index);
-extern int fatfs_wait_pops_mass0(unsigned int timeout_us);
 
 #endif

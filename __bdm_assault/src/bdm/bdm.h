@@ -63,7 +63,6 @@ void bdm_connect_fs(struct file_system *fs);
 void bdm_disconnect_fs(struct file_system *fs);
 void bdm_get_bd(struct block_device **pbd, unsigned int count);
 void bdm_RegisterCallback(bdm_cb cb);
-int fatfs_wait_pops_mass0(unsigned int timeout_us);
 
 #define bdm_IMPORTS_start DECLARE_IMPORT_TABLE(bdm, 1, 1)
 #define bdm_IMPORTS_end   END_IMPORT_TABLE
@@ -74,6 +73,5 @@ int fatfs_wait_pops_mass0(unsigned int timeout_us);
 #define I_bdm_disconnect_fs    DECLARE_IMPORT(7, bdm_disconnect_fs)
 #define I_bdm_get_bd           DECLARE_IMPORT(8, bdm_get_bd)
 #define I_bdm_RegisterCallback DECLARE_IMPORT(9, bdm_RegisterCallback)
-#define I_fatfs_wait_pops_mass0 DECLARE_IMPORT(10, fatfs_wait_pops_mass0)
 
 #endif

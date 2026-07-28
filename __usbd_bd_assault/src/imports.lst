@@ -32,6 +32,7 @@ sysclib_IMPORTS_end
 bdm_IMPORTS_start
 I_bdm_connect_bd
 I_bdm_disconnect_bd
+I_bdm_get_bd
 bdm_IMPORTS_end
 
 dmacman_IMPORTS_start

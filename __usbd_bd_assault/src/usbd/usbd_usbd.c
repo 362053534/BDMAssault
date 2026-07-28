@@ -22,6 +22,9 @@ IRX_ID(MODNAME, 1, 1);
 /* FatFs挂载在BDM线程异步完成；等到mass0出现POPS/或超时 */
 #define BDM_HDD_POPS_WAIT_TOTAL_US (30000000)
 #define BDM_HDD_POPS_WAIT_STEP_US  (50000)
+#define BDM_HDD_MOUNT_SETTLE_US    (100000)
+#define BDM_HDD_BD_MAX             20
+#define BDM_HDD_MASS_MAX           10
 
 extern int dev9_start(int argc, char *argv[]);
 extern int atad_start(int argc, char *argv[]);
@@ -71,34 +74,154 @@ static void ata_dbg_line(const char *line)
     ata_dbg_flush();
 }
 
-/* 用ioman探测mass:/POPS；提升仍由bdm_assault的connect_bd完成 */
+/* 探测指定mass单元是否存在POPS目录 */
+static int bdm_hdd_mass_has_pops(int unit)
+{
+    char path[16];
+    int fd;
+
+    if (unit < 0 || unit >= BDM_HDD_MASS_MAX)
+        return 0;
+
+    if (unit == 0) {
+        fd = dopen("mass:/POPS");
+        if (fd >= 0) {
+            dclose(fd);
+            return 1;
+        }
+        fd = dopen("mass0:/POPS");
+        if (fd >= 0) {
+            dclose(fd);
+            return 1;
+        }
+        return 0;
+    }
+
+    /* massN:/POPS */
+    path[0] = 'm';
+    path[1] = 'a';
+    path[2] = 's';
+    path[3] = 's';
+    path[4] = '0' + unit;
+    path[5] = ':';
+    path[6] = '/';
+    path[7] = 'P';
+    path[8] = 'O';
+    path[9] = 'P';
+    path[10] = 'S';
+    path[11] = '\0';
+
+    fd = dopen(path);
+    if (fd >= 0) {
+        dclose(fd);
+        return 1;
+    }
+    return 0;
+}
+
+/*
+ * 仅重挂载ATA分区：把含POPS的卷接到最低空闲mass槽（通常为mass0）。
+ * 不改bdm_assault，避免影响其它设备上的POPS路径。
+ */
+static int bdm_hdd_promote_ata_pops_to_mass0(void)
+{
+    struct block_device *bds[BDM_HDD_BD_MAX];
+    struct block_device *ata_parts[BDM_HDD_BD_MAX];
+    struct block_device *pops_bd;
+    int n;
+    int i;
+    int j;
+
+    memset(bds, 0, sizeof(bds));
+    bdm_get_bd(bds, BDM_HDD_BD_MAX);
+
+    n = 0;
+    for (i = 0; i < BDM_HDD_BD_MAX; i++) {
+        if (bds[i] && bds[i]->name && strcmp(bds[i]->name, "ata") == 0 && bds[i]->parNr != 0)
+            ata_parts[n++] = bds[i];
+    }
+
+    if (n <= 0)
+        return -1;
+    if (n == 1)
+        return bdm_hdd_mass_has_pops(0) ? 0 : -1;
+
+    for (i = 0; i < n; i++)
+        bdm_disconnect_bd(ata_parts[i]);
+    DelayThread(BDM_HDD_MOUNT_SETTLE_US);
+
+    pops_bd = NULL;
+    for (i = 0; i < n; i++) {
+        bdm_connect_bd(ata_parts[i]);
+        for (j = 0; j < 40; j++) {
+            DelayThread(BDM_HDD_POPS_WAIT_STEP_US);
+            if (bdm_hdd_mass_has_pops(0)) {
+                pops_bd = ata_parts[i];
+                break;
+            }
+        }
+        if (pops_bd)
+            break;
+        bdm_disconnect_bd(ata_parts[i]);
+        DelayThread(BDM_HDD_MOUNT_SETTLE_US);
+    }
+
+    if (!pops_bd) {
+        for (i = 0; i < n; i++)
+            bdm_connect_bd(ata_parts[i]);
+        DelayThread(BDM_HDD_MOUNT_SETTLE_US);
+        return -1;
+    }
+
+    for (i = 0; i < n; i++) {
+        if (ata_parts[i] != pops_bd)
+            bdm_connect_bd(ata_parts[i]);
+    }
+    DelayThread(BDM_HDD_MOUNT_SETTLE_US);
+    return 0;
+}
+
+/* 等待mass0:/POPS；若POPS在其它ATA卷则在本模块内提升 */
 static int bdm_hdd_wait_pops_on_mass0(void)
 {
     unsigned int waited;
-    int fd;
-    static const char *const pops_paths[] = {
-        "mass:/POPS",
-        "mass0:/POPS",
-        "mass:POPS",
-        "mass0:POPS",
-    };
-    int i;
+    int unit;
+    int found;
+    int promoted;
 
+    promoted = 0;
     for (waited = 0; waited < BDM_HDD_POPS_WAIT_TOTAL_US; waited += BDM_HDD_POPS_WAIT_STEP_US) {
-        for (i = 0; i < 4; i++) {
-            fd = dopen(pops_paths[i], FIO_O_RDONLY);
-            if (fd >= 0) {
-                dclose(fd);
-                ata_dbg_line("POPS_OK\n");
-                printf("BDM HDD Assault: mass POPS ready (%u ms)\n", waited / 1000);
-                return 0;
+        if (bdm_hdd_mass_has_pops(0)) {
+            ata_dbg_line("POPS_OK\n");
+            printf("BDM HDD Assault: mass0 POPS ready (%u ms)\n", waited / 1000);
+            return 0;
+        }
+
+        found = -1;
+        for (unit = 1; unit < BDM_HDD_MASS_MAX; unit++) {
+            if (bdm_hdd_mass_has_pops(unit)) {
+                found = unit;
+                break;
             }
         }
+
+        if (found > 0 && !promoted) {
+            ata_dbg_line("PROMOTE\n");
+            printf("BDM HDD Assault: POPS on mass%d, promoting ATA volume\n", found);
+            if (bdm_hdd_promote_ata_pops_to_mass0() == 0 && bdm_hdd_mass_has_pops(0)) {
+                ata_dbg_line("POPS_OK\n");
+                printf("BDM HDD Assault: mass0 POPS ready after promote (%u ms)\n",
+                       waited / 1000);
+                return 0;
+            }
+            promoted = 1;
+        }
+
         DelayThread(BDM_HDD_POPS_WAIT_STEP_US);
     }
 
     ata_dbg_line("POPS_TIMEOUT\n");
-    printf("BDM HDD Assault: mass POPS not ready after %u ms\n",
+    printf("BDM HDD Assault: mass0 POPS not ready after %u ms\n",
            BDM_HDD_POPS_WAIT_TOTAL_US / 1000);
     return -1;
 }

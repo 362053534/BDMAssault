@@ -1,5 +1,6 @@
 
-IOP_BIN = ../bdm_assault.irx
+# POPStarter / FMCB 成品名：直接输出 usbd.irx，无需再改名
+IOP_BIN = ../usbd.irx
 
 
 #bdm
@@ -14,7 +15,7 @@ IOP_LIBS += -static-libgcc -lgcc
 IOP_OBJS = $(addprefix bdm_,$(BDM_OBJS)) $(addprefix bdmfs_,$(BDMFS_FATFS_OBJS)) imports.o exports.o
 ifeq ($(DEBUG), 1)
   IOP_CFLAGS += -DDEBUG -DDEBUG_EXTREME
-  IOP_BIN = ../bdm_assault_debug.irx
+  IOP_BIN = ../usbd_debug.irx
 endif
 include ../global.make
 IOP_SRC_DIR =

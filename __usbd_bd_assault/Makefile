@@ -5,8 +5,9 @@
 # BDM HDD Assault for POPStarter (usbhdfsd.irx slot):
 # Link DEV9 + ATAD into one IRX and call their start functions directly.
 # Do NOT nest LoadModuleBuffer for ATA — that breaks import order / start.
+# 成品名：直接输出 bdmhdd.irx，无需再改名
 
-IOP_BIN = ../usbd_bd_assault.irx
+IOP_BIN = ../bdmhdd.irx
 
 # ATAD options
 ATA_SCE_AUTH_HDD ?= 0

@@ -28,6 +28,8 @@
 //#define DEBUG  //comment out this line when not debugging
 #include "include/module_debug.h"
 
+#define U64_2XU32(val)  ((u32*)val)[1], ((u32*)val)[0]
+
 fatfs_fs_driver_mount_info fs_driver_mount_info[FF_VOLUMES];
 
 #define FATFS_FS_DRIVER_MOUNT_INFO_MAX ((int)(sizeof(fs_driver_mount_info) / sizeof(fs_driver_mount_info[0])))
@@ -192,197 +194,6 @@ static void fatfs_fs_driver_stop_all_bd(void)
     }
 }
 
-/* 检查指定mass单元根目录是否存在POPS文件夹 */
-static int fatfs_fs_driver_volume_has_pops(int mount_info_index)
-{
-    DIR dir;
-    char path[16];
-    FRESULT res;
-
-    if (mount_info_index < 0 || mount_info_index >= FATFS_FS_DRIVER_MOUNT_INFO_MAX)
-        return 0;
-    if (fs_driver_mount_info[mount_info_index].mounted_bd == NULL)
-        return 0;
-
-    path[0] = '0' + mount_info_index;
-    path[1] = ':';
-    path[2] = '/';
-    path[3] = 'P';
-    path[4] = 'O';
-    path[5] = 'P';
-    path[6] = 'S';
-    path[7] = '\0';
-
-    res = f_opendir(&dir, path);
-    if (res == FR_OK) {
-        f_closedir(&dir);
-        return 1;
-    }
-    return 0;
-}
-
-/* 将含POPS/的卷换到mass0，供POPS的mass:路径使用 */
-static void fatfs_fs_driver_promote_pops_to_mass0(int pops_index)
-{
-    struct block_device *pops_bd;
-    struct block_device *mass0_bd;
-
-    if (pops_index <= 0 || pops_index >= FATFS_FS_DRIVER_MOUNT_INFO_MAX)
-        return;
-
-    pops_bd = fs_driver_mount_info[pops_index].mounted_bd;
-    mass0_bd = fs_driver_mount_info[0].mounted_bd;
-    if (!pops_bd)
-        return;
-
-    fatfs_fs_driver_unmount_bd(pops_index);
-    if (mass0_bd)
-        fatfs_fs_driver_unmount_bd(0);
-
-    if (fatfs_fs_driver_mount_bd(0, pops_bd) != FR_OK) {
-        /* 提升失败则尽量恢复原挂载顺序 */
-        if (mass0_bd)
-            fatfs_fs_driver_mount_bd(0, mass0_bd);
-        fatfs_fs_driver_mount_bd(pops_index, pops_bd);
-        return;
-    }
-
-    if (mass0_bd) {
-        if (fatfs_fs_driver_mount_bd(pops_index, mass0_bd) != FR_OK) {
-            printf("BDM_ASSAULT: remount previous mass0 to mass%d failed\n", pops_index);
-        }
-    }
-
-    printf("BDM_ASSAULT: promoted POPS volume to mass0 (was mass%d)\n", pops_index);
-}
-
-/* 在指定mass单元写入调试标记文件（实机无日志时用） */
-static void fatfs_dbg_write_file(int mount_info_index, const char *relpath, const char *content)
-{
-    FIL fil;
-    char path[40];
-    UINT bw;
-    int clen;
-
-    if (mount_info_index < 0 || mount_info_index >= FATFS_FS_DRIVER_MOUNT_INFO_MAX)
-        return;
-    if (fs_driver_mount_info[mount_info_index].mounted_bd == NULL)
-        return;
-    if (!relpath || !content)
-        return;
-
-    path[0] = '0' + mount_info_index;
-    path[1] = ':';
-    path[2] = '/';
-    strncpy(path + 3, relpath, sizeof(path) - 4);
-    path[sizeof(path) - 1] = '\0';
-
-    if (f_open(&fil, path, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK)
-        return;
-
-    clen = strlen(content);
-    f_write(&fil, content, clen, &bw);
-    f_close(&fil);
-}
-
-/* 任一只ATA卷挂上时写mass:/_ATA_MOUNT.OK */
-static void fatfs_dbg_mark_ata_mounted(void)
-{
-    int i;
-    struct block_device *bd;
-    char body[32];
-    int count;
-
-    count = 0;
-    for (i = 0; i < FATFS_FS_DRIVER_MOUNT_INFO_MAX; i++) {
-        bd = fs_driver_mount_info[i].mounted_bd;
-        if (bd && bd->name && strcmp(bd->name, "ata") == 0)
-            count++;
-    }
-    if (count <= 0)
-        return;
-
-    sprintf(body, "MASS_N=%d\n", count);
-    for (i = 0; i < FATFS_FS_DRIVER_MOUNT_INFO_MAX; i++) {
-        bd = fs_driver_mount_info[i].mounted_bd;
-        if (bd && bd->name && strcmp(bd->name, "ata") == 0)
-            fatfs_dbg_write_file(i, "_ATA_MOUNT.OK", body);
-    }
-}
-
-/* 等待POPS卷出现在mass0（含异步挂载与提升），超时返回-1 */
-int fatfs_wait_pops_mass0(unsigned int timeout_us)
-{
-    unsigned int waited;
-    int i;
-    struct block_device *bd;
-    int marked_mount;
-    char body[48];
-
-    marked_mount = 0;
-
-    for (waited = 0; waited < timeout_us; waited += 50000) {
-        _fs_lock();
-
-        if (!marked_mount) {
-            for (i = 0; i < FATFS_FS_DRIVER_MOUNT_INFO_MAX; i++) {
-                bd = fs_driver_mount_info[i].mounted_bd;
-                if (bd && bd->name && strcmp(bd->name, "ata") == 0) {
-                    fatfs_dbg_mark_ata_mounted();
-                    marked_mount = 1;
-                    break;
-                }
-            }
-        }
-
-        if (fatfs_fs_driver_volume_has_pops(0)) {
-            sprintf(body, "OK %u ms\n", waited / 1000);
-            fatfs_dbg_write_file(0, "POPS/_WAIT.OK", body);
-            _fs_unlock();
-            printf("BDM_ASSAULT: mass0:/POPS ready (%u ms)\n", waited / 1000);
-            return 0;
-        }
-
-        /* 补扫：若POPS已在其它ATA卷则提升到mass0 */
-        for (i = 1; i < FATFS_FS_DRIVER_MOUNT_INFO_MAX; i++) {
-            bd = fs_driver_mount_info[i].mounted_bd;
-            if (bd && bd->name && strcmp(bd->name, "ata") == 0 &&
-                fatfs_fs_driver_volume_has_pops(i)) {
-                fatfs_fs_driver_promote_pops_to_mass0(i);
-                break;
-            }
-        }
-
-        if (fatfs_fs_driver_volume_has_pops(0)) {
-            sprintf(body, "OK promote %u ms\n", waited / 1000);
-            fatfs_dbg_write_file(0, "POPS/_WAIT.OK", body);
-            _fs_unlock();
-            printf("BDM_ASSAULT: mass0:/POPS ready after promote (%u ms)\n", waited / 1000);
-            return 0;
-        }
-
-        _fs_unlock();
-        DelayThread(50000);
-    }
-
-    /* 超时：若已挂上ATA则留下失败标记 */
-    _fs_lock();
-    if (!marked_mount)
-        fatfs_dbg_mark_ata_mounted();
-    sprintf(body, "TIMEOUT %u ms\n", timeout_us / 1000);
-    for (i = 0; i < FATFS_FS_DRIVER_MOUNT_INFO_MAX; i++) {
-        bd = fs_driver_mount_info[i].mounted_bd;
-        if (bd && bd->name && strcmp(bd->name, "ata") == 0)
-            fatfs_dbg_write_file(i, "_ATA_TIMEOUT.TXT", body);
-    }
-    if (fs_driver_mount_info[0].mounted_bd)
-        fatfs_dbg_write_file(0, "_ATA_TIMEOUT.TXT", body);
-    _fs_unlock();
-
-    printf("BDM_ASSAULT: mass0:/POPS not ready after %u ms\n", timeout_us / 1000);
-    return -1;
-}
-
 int connect_bd(struct block_device *bd)
 {
     int mount_info_index;
@@ -394,12 +205,6 @@ int connect_bd(struct block_device *bd)
     if (mount_info_index != -1) {
         M_DEBUG("connect_bd: trying to mount to index %d\n", mount_info_index);
         if (fatfs_fs_driver_mount_bd(mount_info_index, bd) == FR_OK) {
-            /* 仅处理ATA卷，避免误提升其它块设备 */
-            if (bd->name && strcmp(bd->name, "ata") == 0 &&
-                fatfs_fs_driver_volume_has_pops(mount_info_index)) {
-                if (mount_info_index != 0 && !fatfs_fs_driver_volume_has_pops(0))
-                    fatfs_fs_driver_promote_pops_to_mass0(mount_info_index);
-            }
             _fs_unlock();
             return 0;
         }
@@ -455,6 +260,24 @@ static DIR *fs_find_free_dir_structure(void)
         }
     }
     return NULL;
+}
+
+//---------------------------------------------------------------------------
+static int fs_dummy(void)
+{
+    M_DEBUG("%s\n", __func__);
+
+    return -5;
+}
+
+//---------------------------------------------------------------------------
+static int fs_init(iop_device_t *driver)
+{
+    M_DEBUG("%s\n", __func__);
+
+    (void)driver;
+
+    return 1;
 }
 
 //---------------------------------------------------------------------------
@@ -816,11 +639,9 @@ static int get_frag_list(FIL *file, void *rdata, unsigned int rdatalen)
             // Fragment or file end
             M_DEBUG("fragment: %uc - %uc + 1\n", iClusterStart, iClusterCurrent + 1);
             if (iFragCount < iMaxFragments) {
-                u64 sector = clst2sect(file->obj.fs, iClusterStart) + bd->sectorOffset;
-                f[iFragCount].sector = sector;
+                f[iFragCount].sector = clst2sect(file->obj.fs, iClusterStart) + bd->sectorOffset;
                 f[iFragCount].count  = clst2sect(file->obj.fs, iClusterCurrent) - clst2sect(file->obj.fs, iClusterStart) + file->obj.fs->csize;
-                DEBUG_U64_2XU32(sector);
-                M_DEBUG(" - sectors: 0x%08x%08x count %u\n", sector_u32[1], sector_u32[0], f[iFragCount].count);
+                M_DEBUG(" - sectors: 0x%08x%08x count %u\n", U64_2XU32(&f[iFragCount].sector), f[iFragCount].count);
             }
             iFragCount++;
             iClusterStart = iClusterNext;
@@ -979,33 +800,33 @@ static int fs_devctl(iop_file_t *fd, const char *name, int cmd, void *arg, unsig
 }
 
 static iop_device_ops_t fs_functarray = {
-    DUMMY_IMPLEMENTATION, // init
-    DUMMY_IMPLEMENTATION, // deinit
-    NOT_SUPPORTED, // format
-    &fs_open, // open
-    &fs_close, // close
-    &fs_read, // read
-    &fs_write, // write
-    &fs_lseek, // lseek
-    &fs_ioctl, // ioctl
-    &fs_remove, // remove
-    &fs_mkdir, // mkdir
-    &fs_remove, // rmdir
-    &fs_dopen, // dopen
-    &fs_dclose, // dclose
-    &fs_dread, // dread
-    &fs_getstat, // getstat
-    NOT_SUPPORTED, // chstat
-    &fs_rename, // rename
-    NOT_SUPPORTED, // chdir
-    NOT_SUPPORTED, // sync
-    NOT_SUPPORTED, // mount
-    NOT_SUPPORTED, // umount
-    &fs_lseek64, // lseek64
-    &fs_devctl, // devctl
-    NOT_SUPPORTED, // symlink
-    NOT_SUPPORTED, // readlink
-    &fs_ioctl2, // ioctl2
+    &fs_init,
+    (void *)&fs_dummy,
+    (void *)&fs_dummy,
+    &fs_open,
+    &fs_close,
+    &fs_read,
+    &fs_write,
+    &fs_lseek,
+    &fs_ioctl,
+    &fs_remove,
+    &fs_mkdir,
+    &fs_remove,
+    &fs_dopen,
+    &fs_dclose,
+    &fs_dread,
+    &fs_getstat,
+    (void *)&fs_dummy,
+    &fs_rename,
+    (void *)&fs_dummy,
+    (void *)&fs_dummy,
+    (void *)&fs_dummy,
+    (void *)&fs_dummy,
+    &fs_lseek64,
+    &fs_devctl,
+    (void *)&fs_dummy,
+    (void *)&fs_dummy,
+    &fs_ioctl2,
 };
 static iop_device_t fs_driver = {
     "mass",
