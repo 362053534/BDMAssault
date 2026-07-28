@@ -2,10 +2,10 @@
 #  ____|   |    ____|   |        | |____|
 # |     ___|   |____ ___|    ____| |    \    PS2DEV Open Source Project.
 #-----------------------------------------------------------------------
-# BDM HDD Assault for POPStarter (usbhdfsd.irx slot):
+# BDM HDD Assault for POPStarter/OPL (HDD slot):
 # Link DEV9 + ATAD into one IRX and call their start functions directly.
 # Do NOT nest LoadModuleBuffer for ATA — that breaks import order / start.
-# 成品名：直接输出 bdmhdd.irx，无需再改名
+# 成品名由调用方（OPL）约定，此处只输出 bdmhdd.irx
 
 IOP_BIN = ../bdmhdd.irx
 
