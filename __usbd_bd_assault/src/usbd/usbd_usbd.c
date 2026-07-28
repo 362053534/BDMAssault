@@ -92,6 +92,20 @@ static void ata_dbg_line(const char *line)
     ata_dbg_flush();
 }
 
+/* 踢掉非ATA块设备（如usb），避免抢占mass；可在等待循环中反复调用 */
+static void bdm_hdd_disconnect_non_ata(void)
+{
+    struct block_device *bds[BDM_HDD_BD_MAX];
+    int i;
+
+    memset(bds, 0, sizeof(bds));
+    bdm_get_bd(bds, BDM_HDD_BD_MAX);
+    for (i = 0; i < BDM_HDD_BD_MAX; i++) {
+        if (bds[i] && bds[i]->name && strcmp(bds[i]->name, "ata") != 0)
+            bdm_disconnect_bd(bds[i]);
+    }
+}
+
 /* 记录当前BDM中ata整盘/分区数量，区分ATAD与分区/FatFs失败 */
 static void ata_dbg_log_ata_bds(void)
 {
@@ -275,6 +289,9 @@ static int bdm_hdd_wait_pops_on_mass0(void)
 
     promoted = 0;
     for (waited = 0; waited < BDM_HDD_POPS_WAIT_TOTAL_US; waited += BDM_HDD_POPS_WAIT_STEP_US) {
+        /* 等待期间若USB又连上，继续踢掉 */
+        bdm_hdd_disconnect_non_ata();
+
         /* 先数分区；ATAP=0时不要dopen(mass:)，避免踩到卡住的挂载路径 */
         parts = 0;
         memset(bds, 0, sizeof(bds));
@@ -353,9 +370,9 @@ int _start(int argc, char *argv[])
     memset(g_mass_seen, 0, sizeof(g_mass_seen));
     ata_dbg_line("START\n");
 
-    /* 屏蔽USB等非ATA设备，避免抢占mass0 */
-    bdm_set_ata_only(1);
-    ata_dbg_line("ATA_ONLY\n");
+    /* 屏蔽已挂上的USB等非ATA设备，避免抢占mass0 */
+    bdm_hdd_disconnect_non_ata();
+    ata_dbg_line("NO_USB\n");
 
     printf("BDM HDD Assault: starting DEV9\n");
     dev9_argv[0] = MODNAME;
