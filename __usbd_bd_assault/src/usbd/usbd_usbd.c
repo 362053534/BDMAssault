@@ -106,6 +106,52 @@ static void bdm_hdd_disconnect_non_ata(void)
     }
 }
 
+/* 重挂ATA整盘以再次触发MBR/GPT+FatFs（挂载失败时在超时前重试） */
+static int bdm_hdd_remount_ata_wholes(void)
+{
+    struct block_device *bds[BDM_HDD_BD_MAX];
+    struct block_device *wholes[BDM_HDD_BD_MAX];
+    int n;
+    int i;
+
+    memset(bds, 0, sizeof(bds));
+    bdm_get_bd(bds, BDM_HDD_BD_MAX);
+
+    n = 0;
+    for (i = 0; i < BDM_HDD_BD_MAX; i++) {
+        if (bds[i] && bds[i]->name && strcmp(bds[i]->name, "ata") == 0 && bds[i]->parNr == 0)
+            wholes[n++] = bds[i];
+    }
+    if (n <= 0)
+        return -1;
+
+    for (i = 0; i < n; i++)
+        bdm_disconnect_bd(wholes[i]);
+    DelayThread(BDM_HDD_MOUNT_SETTLE_US);
+
+    for (i = 0; i < n; i++)
+        bdm_connect_bd(wholes[i]);
+    DelayThread(BDM_HDD_MOUNT_SETTLE_US);
+    return 0;
+}
+
+/* 统计当前ata分区数量 */
+static int bdm_hdd_count_ata_parts(void)
+{
+    struct block_device *bds[BDM_HDD_BD_MAX];
+    int i;
+    int parts;
+
+    memset(bds, 0, sizeof(bds));
+    bdm_get_bd(bds, BDM_HDD_BD_MAX);
+    parts = 0;
+    for (i = 0; i < BDM_HDD_BD_MAX; i++) {
+        if (bds[i] && bds[i]->name && strcmp(bds[i]->name, "ata") == 0 && bds[i]->parNr != 0)
+            parts++;
+    }
+    return parts;
+}
+
 /* 记录当前BDM中ata整盘/分区数量，区分ATAD与分区/FatFs失败 */
 static void ata_dbg_log_ata_bds(void)
 {
@@ -271,7 +317,7 @@ static int bdm_hdd_promote_ata_pops_to_mass0(void)
     return 0;
 }
 
-/* 等待mass0:/POPS；若POPS在其它ATA卷则在本模块内提升 */
+/* 等待mass0:/POPS；ATA未挂上则在30秒内不断重试重挂 */
 static int bdm_hdd_wait_pops_on_mass0(void)
 {
     unsigned int waited;
@@ -279,32 +325,41 @@ static int bdm_hdd_wait_pops_on_mass0(void)
     int found;
     int promoted;
     int parts;
+    int remount_cd;
+    int mass_any;
     char seen_line[8];
-    struct block_device *bds[BDM_HDD_BD_MAX];
-    int i;
 
-    /* 给BDM异步挂载一点时间后再采样块设备 */
     DelayThread(BDM_HDD_MOUNT_SETTLE_US * 2);
     ata_dbg_log_ata_bds();
 
     promoted = 0;
+    remount_cd = 0;
     for (waited = 0; waited < BDM_HDD_POPS_WAIT_TOTAL_US; waited += BDM_HDD_POPS_WAIT_STEP_US) {
-        /* 等待期间若USB又连上，继续踢掉 */
         bdm_hdd_disconnect_non_ata();
 
-        /* 先数分区；ATAP=0时不要dopen(mass:)，避免踩到卡住的挂载路径 */
-        parts = 0;
-        memset(bds, 0, sizeof(bds));
-        bdm_get_bd(bds, BDM_HDD_BD_MAX);
-        for (i = 0; i < BDM_HDD_BD_MAX; i++) {
-            if (bds[i] && bds[i]->name && strcmp(bds[i]->name, "ata") == 0 && bds[i]->parNr != 0)
-                parts++;
+        parts = bdm_hdd_count_ata_parts();
+        mass_any = 0;
+        for (unit = 0; unit < BDM_HDD_MASS_MAX; unit++) {
+            if (bdm_hdd_mass_ready(unit)) {
+                mass_any = 1;
+                break;
+            }
         }
 
-        if (parts <= 0) {
+        /* ATA分区或FatFs未就绪：约每1秒重挂整盘，直到30秒超时 */
+        if (parts <= 0 || !mass_any) {
+            if (remount_cd <= 0) {
+                ata_dbg_line("ATA_RETRY\n");
+                bdm_hdd_remount_ata_wholes();
+                remount_cd = 1000000 / BDM_HDD_POPS_WAIT_STEP_US;
+                memset(g_mass_seen, 0, sizeof(g_mass_seen));
+            } else {
+                remount_cd--;
+            }
             DelayThread(BDM_HDD_POPS_WAIT_STEP_US);
             continue;
         }
+        remount_cd = 0;
 
         for (unit = 0; unit < BDM_HDD_MASS_MAX; unit++) {
             if (!g_mass_seen[unit] && bdm_hdd_mass_ready(unit)) {
@@ -360,6 +415,7 @@ static int bdm_hdd_wait_pops_on_mass0(void)
 int _start(int argc, char *argv[])
 {
     int result;
+    unsigned int waited;
     /* 不要把POPStarter传入的argv转给DEV9（未知-xxx参数会直接失败退出） */
     char *dev9_argv[1];
 
@@ -370,9 +426,10 @@ int _start(int argc, char *argv[])
     memset(g_mass_seen, 0, sizeof(g_mass_seen));
     ata_dbg_line("START\n");
 
-    /* 屏蔽已挂上的USB等非ATA设备，避免抢占mass0 */
+    /* usbd入口拦截 + 本模块再清一次已挂设备 */
+    bdm_set_ata_only(1);
     bdm_hdd_disconnect_non_ata();
-    ata_dbg_line("NO_USB\n");
+    ata_dbg_line("ATA_ONLY\n");
 
     printf("BDM HDD Assault: starting DEV9\n");
     dev9_argv[0] = MODNAME;
@@ -384,8 +441,18 @@ int _start(int argc, char *argv[])
     }
     ata_dbg_line("DEV9_OK\n");
 
+    /* ATAD失败则在30秒内重试，超时后不再重试 */
     printf("BDM HDD Assault: starting ATAD (BDM)\n");
-    result = atad_start(0, NULL);
+    result = MODULE_NO_RESIDENT_END;
+    for (waited = 0; waited < BDM_HDD_POPS_WAIT_TOTAL_US; waited += BDM_HDD_POPS_WAIT_STEP_US) {
+        bdm_set_ata_only(1);
+        bdm_hdd_disconnect_non_ata();
+        result = atad_start(0, NULL);
+        if (result != MODULE_NO_RESIDENT_END)
+            break;
+        ata_dbg_line("ATAD_RETRY\n");
+        DelayThread(BDM_HDD_POPS_WAIT_STEP_US);
+    }
     if (result == MODULE_NO_RESIDENT_END) {
         ata_dbg_line("ATAD_FAIL\n");
         printf("BDM HDD Assault: ATAD start failed (no HDD / init error)\n");
