@@ -1,5 +1,6 @@
 #include <bdm.h>
 #include <stdio.h>
+#include <sysclib.h>
 #include <thbase.h>
 #include <thevent.h>
 
@@ -21,6 +22,8 @@ static struct file_system *g_fs[MAX_CONNECTIONS];
 static bdm_cb g_cb       = NULL;
 static int bdm_event     = -1;
 static int bdm_thread_id = -1;
+/* BDM HDD POPS：只允许ata进BDM，屏蔽USB等抢占mass */
+static int g_ata_only    = 0;
 
 /* Event flag bits */
 #define BDM_EVENT_CB_MOUNT  0x01
@@ -47,9 +50,31 @@ void bdm_RegisterCallback(bdm_cb cb)
     }
 }
 
+void bdm_set_ata_only(int enable)
+{
+    int i;
+    struct block_device *bd;
+
+    g_ata_only = enable ? 1 : 0;
+    if (!g_ata_only)
+        return;
+
+    /* 断开已连接的非ATA块设备（如usb），避免占mass槽 */
+    for (i = 0; i < MAX_CONNECTIONS; ++i) {
+        bd = g_mount[i].bd;
+        if (bd && bd->name && strcmp(bd->name, "ata") != 0)
+            bdm_disconnect_bd(bd);
+    }
+}
+
 void bdm_connect_bd(struct block_device *bd)
 {
     int i;
+
+    if (g_ata_only && bd && bd->name && strcmp(bd->name, "ata") != 0) {
+        M_PRINTF("ignoring non-ata device %s%dp%d\n", bd->name, bd->devNr, bd->parNr);
+        return;
+    }
 
     M_PRINTF("connecting device %s%dp%d id=0x%x\n", bd->name, bd->devNr, bd->parNr, bd->parId);
 

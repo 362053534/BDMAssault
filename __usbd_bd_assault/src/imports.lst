@@ -33,6 +33,7 @@ bdm_IMPORTS_start
 I_bdm_connect_bd
 I_bdm_disconnect_bd
 I_bdm_get_bd
+I_bdm_set_ata_only
 bdm_IMPORTS_end
 
 dmacman_IMPORTS_start

@@ -353,6 +353,10 @@ int _start(int argc, char *argv[])
     memset(g_mass_seen, 0, sizeof(g_mass_seen));
     ata_dbg_line("START\n");
 
+    /* 屏蔽USB等非ATA设备，避免抢占mass0 */
+    bdm_set_ata_only(1);
+    ata_dbg_line("ATA_ONLY\n");
+
     printf("BDM HDD Assault: starting DEV9\n");
     dev9_argv[0] = MODNAME;
     result = dev9_start(1, dev9_argv);
