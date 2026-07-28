@@ -25,19 +25,22 @@ int part_connect_gpt(struct block_device *bd)
     gpt_partition_table_header* pGptHeader;
     gpt_partition_table_entry* pGptPartitionEntry;
     int entriesPerSector;
-    int endOfTable = 0;
     char partName[37] = { 0 };
     int partIndex;
     int mountCount = 0;
 
     M_DEBUG("%s\n", __func__);
 
+    // 分区伪设备不是整盘，交给上层 FS（如 fatfs）处理。
+    if (bd->sectorOffset != 0)
+        return -1;
+
     // Allocate scratch memory for parsing the partition table.
     buffer = AllocSysMemory(ALLOC_FIRST, 512 * 2, NULL);
     if (buffer == NULL)
     {
         M_DEBUG("Failed to allocate memory\n");
-        return 0;
+        return -1;
     }
 
     pGptHeader = (gpt_partition_table_header*)buffer;
@@ -70,7 +73,7 @@ int part_connect_gpt(struct block_device *bd)
 
     // Loop through all the partition table entries and attempt to mount each one.
     printf("Found GPT disk '%08x...'\n", *(u32*)&pGptHeader->disk_guid);
-    for (int i = 0; i < pGptHeader->partition_count && endOfTable == 0; )
+    for (int i = 0; i < pGptHeader->partition_count; )
     {
         // Check if we need to buffer more data, GPT usually uses LBA 2-33 for partition table entries. Typically there will
         // only be a couple partitions at most, so we buffer one sector at a time to avoid making needless allocations for all sectors at once.
@@ -96,9 +99,8 @@ int part_connect_gpt(struct block_device *bd)
                 // we need to check if the entries are actually valid.
                 if (memcmp(pGptPartitionEntry[x].partition_type_guid, NULL_GUID, sizeof(NULL_GUID)) == 0)
                 {
-                    // Stop scanning for partitions.
-                    endOfTable = 1;
-                    break;
+                    // 空槽继续扫描，避免稀疏 GPT 表提前结束漏掉后面的数据分区。
+                    continue;
                 }
 
                 // Perform some sanity checks on the partition.
@@ -140,7 +142,8 @@ int part_connect_gpt(struct block_device *bd)
                 g_part_bd[partIndex].parId        = 0;
                 g_part_bd[partIndex].sectorSize   = bd->sectorSize;
                 g_part_bd[partIndex].sectorOffset = bd->sectorOffset + pGptPartitionEntry[x].first_lba;
-                g_part_bd[partIndex].sectorCount  = pGptPartitionEntry[x].last_lba - pGptPartitionEntry[x].first_lba;
+                // GPT last_lba 为含端点，扇区数需 +1。
+                g_part_bd[partIndex].sectorCount  = pGptPartitionEntry[x].last_lba - pGptPartitionEntry[x].first_lba + 1;
                 bdm_connect_bd(&g_part_bd[partIndex]);
                 mountCount++;
             }
