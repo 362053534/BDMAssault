@@ -103,12 +103,12 @@ static int bdm_hdd_mass_ready(int unit)
         return 0;
 
     if (unit == 0) {
-        fd = dopen("mass:/");
+        fd = dopen("mass:/", FIO_O_RDONLY);
         if (fd >= 0) {
             dclose(fd);
             return 1;
         }
-        fd = dopen("mass0:/");
+        fd = dopen("mass0:/", FIO_O_RDONLY);
         if (fd >= 0) {
             dclose(fd);
             return 1;
@@ -118,7 +118,7 @@ static int bdm_hdd_mass_ready(int unit)
 
     bdm_hdd_make_mass_path(path, unit, "");
     /* path 形如 massN:/ */
-    fd = dopen(path);
+    fd = dopen(path, FIO_O_RDONLY);
     if (fd >= 0) {
         dclose(fd);
         return 1;
@@ -136,12 +136,12 @@ static int bdm_hdd_mass_has_pops(int unit)
         return 0;
 
     if (unit == 0) {
-        fd = dopen("mass:/POPS");
+        fd = dopen("mass:/POPS", FIO_O_RDONLY);
         if (fd >= 0) {
             dclose(fd);
             return 1;
         }
-        fd = dopen("mass0:/POPS");
+        fd = dopen("mass0:/POPS", FIO_O_RDONLY);
         if (fd >= 0) {
             dclose(fd);
             return 1;
@@ -150,7 +150,7 @@ static int bdm_hdd_mass_has_pops(int unit)
     }
 
     bdm_hdd_make_mass_path(path, unit, "POPS");
-    fd = dopen(path);
+    fd = dopen(path, FIO_O_RDONLY);
     if (fd >= 0) {
         dclose(fd);
         return 1;
