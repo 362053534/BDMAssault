@@ -29,8 +29,8 @@ IRX_ID(MODNAME, 1, 1);
 extern int dev9_start(int argc, char *argv[]);
 extern int atad_start(int argc, char *argv[]);
 
-/* 累积调试日志；挂上mass后写入各卷根目录ATA_DBG.TXT（不写记忆卡） */
-static char g_ata_dbg[512];
+/* 累积调试日志；双写记忆卡与mass根目录，便于mass未挂上时仍能定位 */
+static char g_ata_dbg[768];
 static unsigned char g_mass_seen[BDM_HDD_MASS_MAX];
 
 static void bdm_hdd_make_mass_path(char *path, int unit, const char *name)
@@ -51,7 +51,14 @@ static void bdm_hdd_make_mass_path(char *path, int unit, const char *name)
 
 static void ata_dbg_flush(void)
 {
+    static const char *const mc_paths[] = {
+        "mc0:POPSTARTER/ATA_DBG.TXT",
+        "mc0:/POPSTARTER/ATA_DBG.TXT",
+        "mc1:POPSTARTER/ATA_DBG.TXT",
+        "mc1:/POPSTARTER/ATA_DBG.TXT",
+    };
     char path[24];
+    int i;
     int unit;
     int fd;
     int len;
@@ -59,6 +66,15 @@ static void ata_dbg_flush(void)
     len = strlen(g_ata_dbg);
     if (len <= 0)
         return;
+
+    /* 先写MC：mass未就绪时也能看到START/DEV9/ATAD阶段 */
+    for (i = 0; i < 4; i++) {
+        fd = open(mc_paths[i], FIO_O_WRONLY | FIO_O_CREAT | FIO_O_TRUNC);
+        if (fd >= 0) {
+            write(fd, g_ata_dbg, len);
+            close(fd);
+        }
+    }
 
     fd = open("mass:/ATA_DBG.TXT", FIO_O_WRONLY | FIO_O_CREAT | FIO_O_TRUNC);
     if (fd >= 0) {
@@ -91,6 +107,44 @@ static void ata_dbg_line(const char *line)
 
     memcpy(g_ata_dbg + used, line, add + 1);
     ata_dbg_flush();
+}
+
+/* 记录当前BDM中ata整盘/分区数量，区分ATAD与分区/FatFs失败 */
+static void ata_dbg_log_ata_bds(void)
+{
+    struct block_device *bds[BDM_HDD_BD_MAX];
+    char line[10];
+    int i;
+    int whole;
+    int parts;
+
+    memset(bds, 0, sizeof(bds));
+    bdm_get_bd(bds, BDM_HDD_BD_MAX);
+
+    whole = 0;
+    parts = 0;
+    for (i = 0; i < BDM_HDD_BD_MAX; i++) {
+        if (bds[i] && bds[i]->name && strcmp(bds[i]->name, "ata") == 0) {
+            if (bds[i]->parNr == 0)
+                whole++;
+            else
+                parts++;
+        }
+    }
+
+    line[0] = 'A';
+    line[1] = 'T';
+    line[2] = 'A';
+    line[3] = 'W';
+    line[4] = '=';
+    line[5] = '0' + (whole > 9 ? 9 : whole);
+    line[6] = '\n';
+    line[7] = '\0';
+    ata_dbg_line(line);
+
+    line[3] = 'P';
+    line[5] = '0' + (parts > 9 ? 9 : parts);
+    ata_dbg_line(line);
 }
 
 /* 探测指定mass单元根目录是否可打开 */
@@ -229,9 +283,13 @@ static int bdm_hdd_wait_pops_on_mass0(void)
     int promoted;
     char seen_line[8];
 
+    /* 给BDM异步挂载一点时间后再采样块设备 */
+    DelayThread(BDM_HDD_MOUNT_SETTLE_US * 2);
+    ata_dbg_log_ata_bds();
+
     promoted = 0;
     for (waited = 0; waited < BDM_HDD_POPS_WAIT_TOTAL_US; waited += BDM_HDD_POPS_WAIT_STEP_US) {
-        /* 轮询已挂上的mass，首次发现时记日志并刷到该设备根目录 */
+        /* 轮询已挂上的mass，首次发现时记日志并刷到MC+mass */
         for (unit = 0; unit < BDM_HDD_MASS_MAX; unit++) {
             if (!g_mass_seen[unit] && bdm_hdd_mass_ready(unit)) {
                 g_mass_seen[unit] = 1;
@@ -269,12 +327,14 @@ static int bdm_hdd_wait_pops_on_mass0(void)
                        waited / 1000);
                 return 0;
             }
+            ata_dbg_line("PROMOTE_FAIL\n");
             promoted = 1;
         }
 
         DelayThread(BDM_HDD_POPS_WAIT_STEP_US);
     }
 
+    ata_dbg_log_ata_bds();
     ata_dbg_line("POPS_TIMEOUT\n");
     printf("BDM HDD Assault: mass0 POPS not ready after %u ms\n",
            BDM_HDD_POPS_WAIT_TOTAL_US / 1000);
