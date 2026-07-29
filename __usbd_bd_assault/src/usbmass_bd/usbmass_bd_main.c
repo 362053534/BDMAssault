@@ -15,7 +15,7 @@
 #include "include/module_debug.h"
 
 /* FatFs挂载与USB枚举均为异步；等到mass上出现POPS/或超时后再返回给POPStarter */
-#define USB_POPS_WAIT_TOTAL_US (30000000)
+#define USB_POPS_WAIT_TOTAL_US (16000000)
 #define USB_POPS_WAIT_STEP_US  (50000)
 #define USB_MOUNT_SETTLE_US    (100000)
 /* 前几秒只观察、不重挂，避免打断正常枚举/分区/FatFs */
@@ -269,7 +269,6 @@ static int usb_wait_pops_ready(void)
             M_PRINTF("等待: t=%us usb_parts=%d mass_mask=0x%X pops_mask=0x%X\n",
                      waited / 1000000, parts, mass_bits, pops_bits);
             usb_log_bd_snapshot("wait");
-            assault_mc_log_flush();
             last_log = waited;
         }
 
@@ -289,7 +288,6 @@ static int usb_wait_pops_ready(void)
 
         if (usb_mass_has_pops(0)) {
             M_PRINTF("等待: 已在mass0找到POPS（耗时%uus）\n", waited);
-            assault_mc_log_flush();
             return 0;
         }
 
@@ -305,7 +303,6 @@ static int usb_wait_pops_ready(void)
             M_PRINTF("等待: POPS在mass%d，尝试提升到mass0\n", found);
             if (usb_promote_usb_pops_to_mass0() == 0 && usb_mass_has_pops(0)) {
                 M_PRINTF("等待: 提升成功，mass0已有POPS\n");
-                assault_mc_log_flush();
                 return 0;
             }
             promoted = 1;
@@ -320,7 +317,6 @@ static int usb_wait_pops_ready(void)
     for (unit = 0; unit < USB_MASS_MAX; unit++) {
         M_PRINTF("等待: mass%d ready=%d pops=%d\n", unit, usb_mass_ready(unit), usb_mass_has_pops(unit));
     }
-    assault_mc_log_flush();
     return -1;
 }
 
@@ -331,7 +327,7 @@ int usbmass_bd_start(int argc, char *argv[])
 
     assault_mc_log_init("USBHDFSD.LOG");
     M_PRINTF("USBD ASSAULT: starting USBMASS Side\n");
-    M_PRINTF("日志: mc?:POPSTARTER/USBHDFSD.LOG（内存缓冲后刷写）\n");
+    M_PRINTF("log -> mc?:POPSTARTER/USBHDFSD.LOG (flush once at end)\n");
 
     if (scsi_init() != 0) {
         M_PRINTF("ERROR: initializing SCSI driver!\n");
@@ -351,6 +347,7 @@ int usbmass_bd_start(int argc, char *argv[])
     else
         M_PRINTF("就绪: 可向POPStarter返回\n");
 
+    /* 全部完成后只写一次MC，避免加载/等待期间与MCMAN死锁 */
     assault_mc_log_flush();
     return MODULE_RESIDENT_END;
 }
