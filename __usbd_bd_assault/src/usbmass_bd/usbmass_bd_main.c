@@ -11,13 +11,15 @@
 #include <sysclib.h>
 #include <thbase.h>
 
-#define DEBUG /* 排查阶段默认打开详细日志 */
+// #define DEBUG  //comment out this line when not debugging
 #include "include/module_debug.h"
 
 /* FatFs挂载与USB枚举均为异步；等到mass上出现POPS/或超时后再返回给POPStarter */
 #define USB_POPS_WAIT_TOTAL_US (30000000)
 #define USB_POPS_WAIT_STEP_US  (50000)
 #define USB_MOUNT_SETTLE_US    (100000)
+/* 前几秒只观察、不重挂，避免打断正常枚举/分区/FatFs */
+#define USB_REMOUNT_GRACE_US   (8000000)
 #define USB_BD_MAX             20
 #define USB_MASS_MAX           10
 
@@ -267,17 +269,17 @@ static int usb_wait_pops_ready(void)
             M_PRINTF("等待: t=%us usb_parts=%d mass_mask=0x%X pops_mask=0x%X\n",
                      waited / 1000000, parts, mass_bits, pops_bits);
             usb_log_bd_snapshot("wait");
+            assault_mc_log_flush();
             last_log = waited;
         }
 
-        /* 已有USB整盘但分区/FatFs未就绪：约每1秒重挂整盘 */
-        if (parts <= 0 || !mass_any) {
-            if (remount_cd <= 0) {
+        /* 宽限期后再考虑重挂；且仅在完全没有mass时重挂，避免打断已在挂载的盘 */
+        if (!mass_any) {
+            if (waited >= USB_REMOUNT_GRACE_US && remount_cd <= 0) {
                 if (usb_remount_named_wholes("usb") == 0)
-                    remount_cd = 1000000 / USB_POPS_WAIT_STEP_US;
-                else
-                    remount_cd = 1000000 / USB_POPS_WAIT_STEP_US;
-            } else {
+                    M_PRINTF("等待: 宽限期后重挂USB整盘\n");
+                remount_cd = 2000000 / USB_POPS_WAIT_STEP_US; /* 重挂间隔拉到约2秒 */
+            } else if (remount_cd > 0) {
                 remount_cd--;
             }
             DelayThread(USB_POPS_WAIT_STEP_US);
@@ -287,6 +289,7 @@ static int usb_wait_pops_ready(void)
 
         if (usb_mass_has_pops(0)) {
             M_PRINTF("等待: 已在mass0找到POPS（耗时%uus）\n", waited);
+            assault_mc_log_flush();
             return 0;
         }
 
@@ -302,6 +305,7 @@ static int usb_wait_pops_ready(void)
             M_PRINTF("等待: POPS在mass%d，尝试提升到mass0\n", found);
             if (usb_promote_usb_pops_to_mass0() == 0 && usb_mass_has_pops(0)) {
                 M_PRINTF("等待: 提升成功，mass0已有POPS\n");
+                assault_mc_log_flush();
                 return 0;
             }
             promoted = 1;
@@ -316,6 +320,7 @@ static int usb_wait_pops_ready(void)
     for (unit = 0; unit < USB_MASS_MAX; unit++) {
         M_PRINTF("等待: mass%d ready=%d pops=%d\n", unit, usb_mass_ready(unit), usb_mass_has_pops(unit));
     }
+    assault_mc_log_flush();
     return -1;
 }
 
@@ -326,15 +331,17 @@ int usbmass_bd_start(int argc, char *argv[])
 
     assault_mc_log_init("USBHDFSD.LOG");
     M_PRINTF("USBD ASSAULT: starting USBMASS Side\n");
-    M_PRINTF("日志: mc?:POPSTARTER/USBHDFSD.LOG\n");
+    M_PRINTF("日志: mc?:POPSTARTER/USBHDFSD.LOG（内存缓冲后刷写）\n");
 
     if (scsi_init() != 0) {
         M_PRINTF("ERROR: initializing SCSI driver!\n");
+        assault_mc_log_flush();
         return MODULE_NO_RESIDENT_END;
     }
 
     if (usb_mass_init() != 0) {
         M_PRINTF("ERROR: initializing USB driver!\n");
+        assault_mc_log_flush();
         return MODULE_NO_RESIDENT_END;
     }
 
@@ -344,5 +351,6 @@ int usbmass_bd_start(int argc, char *argv[])
     else
         M_PRINTF("就绪: 可向POPStarter返回\n");
 
+    assault_mc_log_flush();
     return MODULE_RESIDENT_END;
 }
