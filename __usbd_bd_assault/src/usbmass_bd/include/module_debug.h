@@ -1,11 +1,9 @@
 #ifndef _MODULE_DEBUG_H
 #define _MODULE_DEBUG_H
 
-#include "assault_mc_log.h"
-
 #define MODNAME "usbmass_bd"
 #ifndef MINI_DRIVER
-#define M_PRINTF(format, args...) assault_mc_log(MODNAME ": " format, ##args)
+#define M_PRINTF(format, args...) printf(MODNAME ": " format, ##args)
 #else
 #define M_PRINTF(format, args...) \
     do {                          \
