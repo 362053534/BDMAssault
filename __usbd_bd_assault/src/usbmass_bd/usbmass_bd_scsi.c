@@ -6,7 +6,7 @@
 #include "include/scsi.h"
 #include <bdm.h>
 
-#define DEBUG /* 排查阶段默认打开详细日志 */
+// #define DEBUG  //comment out this line when not debugging
 #include "include/module_debug.h"
 
 /* 必须用 u32 移位，避免 last_lba>=0x80000000 时有符号左移导致容量错误 */
@@ -319,16 +319,12 @@ void scsi_connect(struct scsi_interface *scsi)
 
             bd->priv = scsi;
             bd->name = scsi->name;
-            M_PRINTF("scsi_connect: 开始warmup name=%s\n", scsi->name ? scsi->name : "?");
             if (scsi_warmup(bd) != 0) {
-                M_PRINTF("ERROR: scsi_warmup failed（大盘容量/设备未就绪？）\n");
+                M_PRINTF("ERROR: scsi_warmup failed\n");
                 bd->priv = NULL;
                 break;
             }
-            M_PRINTF("scsi_connect: warmup成功，bdm_connect_bd sec=%08x%08x sz=%u\n",
-                     U64_2XU32(&bd->sectorCount), bd->sectorSize);
             bdm_connect_bd(bd);
-            M_PRINTF("scsi_connect: 已提交BDM，等待分区驱动与FatFs挂载\n");
             break;
         }
     }

@@ -1,12 +1,10 @@
 #ifndef _MODULE_DEBUG_H
 #define _MODULE_DEBUG_H
 
-#include "../bdmfs/include/assault_mc_log.h"
-
 // #define MINI_DRIVER
 
 #ifndef MINI_DRIVER
-#define M_PRINTF(format, args...) assault_mc_log("BDM: " format, ##args)
+#define M_PRINTF(format, args...) printf("BDM: " format, ##args)
 #else
 #define M_PRINTF(format, args...) \
     do {                          \

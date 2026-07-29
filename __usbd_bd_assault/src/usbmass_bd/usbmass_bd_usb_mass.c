@@ -15,7 +15,7 @@
 #include <usbhdfsd-common.h>
 
 // #define ASYNC
-#define DEBUG /* 排查阶段默认打开详细日志 */
+// #define DEBUG  //comment out this line when not debugging
 #include "include/module_debug.h"
 
 #define USB_SUBCLASS_MASS_RBC       0x01
@@ -785,9 +785,7 @@ static void usb_mass_update(void *arg)
                 }
 
                 dev->status |= USBMASS_DEV_STAT_CONF;
-                M_PRINTF("update: USB配置完成，调用scsi_connect devId=%d\n", dev->devId);
                 scsi_connect(&dev->scsi);
-                M_PRINTF("update: scsi_connect返回\n");
 
                 // This is the same wait amount as done in fat_getData in usbhdfsd.
                 // This is a workaround to avoid incorrect initialization when attaching multiple drives at the same time.
