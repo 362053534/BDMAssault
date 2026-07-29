@@ -15,7 +15,7 @@
 #include <usbhdfsd-common.h>
 
 // #define ASYNC
-// #define DEBUG  //comment out this line when not debugging
+#define DEBUG /* 排查阶段默认打开详细日志 */
 #include "include/module_debug.h"
 
 #define USB_SUBCLASS_MASS_RBC       0x01

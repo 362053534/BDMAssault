@@ -6,7 +6,7 @@
 #include "include/scsi.h"
 #include <bdm.h>
 
-// #define DEBUG  //comment out this line when not debugging
+#define DEBUG /* 排查阶段默认打开详细日志 */
 #include "include/module_debug.h"
 
 /* 必须用 u32 移位，避免 last_lba>=0x80000000 时有符号左移导致容量错误 */
