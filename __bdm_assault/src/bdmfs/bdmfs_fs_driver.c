@@ -157,7 +157,17 @@ static FRESULT fatfs_fs_driver_mount_bd(int mount_info_index, struct block_devic
     fs_driver_mount_info[mount_info_index].mounted_bd = bd;
     ret = f_mount(&(fs_driver_mount_info[mount_info_index].fatfs), mount_point, 1);
     if (ret != FR_OK) {
+        M_PRINTF("挂载失败: mass%d name=%s par=%u ret=%d\n",
+                 mount_info_index,
+                 (bd && bd->name) ? bd->name : "?",
+                 bd ? bd->parNr : 0,
+                 ret);
         fs_driver_mount_info[mount_info_index].mounted_bd = NULL;
+    } else {
+        M_PRINTF("挂载成功: mass%d name=%s par=%u\n",
+                 mount_info_index,
+                 (bd && bd->name) ? bd->name : "?",
+                 bd ? bd->parNr : 0);
     }
     return ret;
 }
