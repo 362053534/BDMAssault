@@ -51,3 +51,8 @@ bdm_IMPORTS_start
 I_bdm_connect_bd
 I_bdm_disconnect_bd
 bdm_IMPORTS_end
+
+ioman_IMPORTS_start
+I_dopen
+I_dclose
+ioman_IMPORTS_end
