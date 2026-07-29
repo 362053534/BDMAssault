@@ -9,7 +9,7 @@ USBD_OBJS = hcd.o hub.o interface.o mem.o usbd.o usbio.o driver.o
 IOP_INCS += -Isrc/usbd/include -I../bdm/include
 IOP_CFLAGS += -Wno-strict-aliasing
 IOP_LDFLAGS += -lgcc
-USBMASS_BD_OBJS = main.o usb_mass.o scsi.o
+USBMASS_BD_OBJS = main.o usb_mass.o scsi.o mc_log.o
 
 IOP_OBJS = $(addprefix usbd_,$(USBD_OBJS)) $(addprefix usbmass_bd_,$(USBMASS_BD_OBJS)) imports.o exports.o
 ifeq ($(DEBUG), 1)
