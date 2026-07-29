@@ -22,6 +22,7 @@ jobs:
           make -C libbdm clean all
           make -C __bdm_assault clean all
           make -C __usbd_bd_assault clean all
+          make -C __bdmhdd_assault clean all
 
       - name: Upload IRX artifacts
         if: ${{ success() }}
@@ -30,5 +31,6 @@ jobs:
           name: BDMAssault
           if-no-files-found: error
           path: |
-            bdm_assault.irx
-            usbd_bd_assault.irx
+            usbd.irx
+            usbhdfsd.irx
+            bdmhdd.irx

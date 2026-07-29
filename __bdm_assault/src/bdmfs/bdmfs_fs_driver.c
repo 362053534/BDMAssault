@@ -198,6 +198,10 @@ int connect_bd(struct block_device *bd)
 
     M_DEBUG("%s\n", __func__);
 
+    /* ATA整盘交给MBR/GPT；避免在无分区表或挂载卡住时对整盘f_mount */
+    if (bd && bd->name && strcmp(bd->name, "ata") == 0 && bd->parNr == 0)
+        return -1;
+
     _fs_lock();
     mount_info_index = fatfs_fs_driver_find_mount_info_index_free();
     if (mount_info_index != -1) {

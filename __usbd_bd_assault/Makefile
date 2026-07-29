@@ -1,5 +1,6 @@
 
-IOP_BIN = ../usbd_bd_assault.irx
+# 成品名：输出 usbhdfsd.irx（由 OPL/POPStarter 等调用方按约定加载/映射）
+IOP_BIN = ../usbhdfsd.irx
 
 #usbd
 USBD_OBJS = hcd.o hub.o interface.o mem.o usbd.o usbio.o driver.o
@@ -13,7 +14,7 @@ USBMASS_BD_OBJS = main.o usb_mass.o scsi.o
 IOP_OBJS = $(addprefix usbd_,$(USBD_OBJS)) $(addprefix usbmass_bd_,$(USBMASS_BD_OBJS)) imports.o exports.o
 ifeq ($(DEBUG), 1)
   IOP_CFLAGS += -DDEBUG -DDEBUG_EXTREME
-  IOP_BIN = ../usbd_bd_assault_debug.irx
+  IOP_BIN = ../usbhdfsd_debug.irx
 endif
 
 include ../global.make

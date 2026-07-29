@@ -1,27 +1,39 @@
 # BDM Assault
 
-BDM Assault is a homebrew project for PS2 that aims to bring EXFAT USB support to those old closed source homebrew apps that can load external USB drivers that people still use today (POPStarter, FreeMcBoot).
+BDM Assault is a homebrew project for PS2 that aims to bring EXFAT USB (and optional ATA HDD) support to those old closed source homebrew apps that can load external USB drivers that people still use today (POPStarter, FreeMcBoot).
+
+## Build products
+
+| File | Source tree | Role |
+|------|-------------|------|
+| `usbd.irx` | `__bdm_assault` | BDM + `mass:` (exFAT/FAT) filesystem |
+| `usbhdfsd.irx` | `__usbd_bd_assault` | USB host + USB mass storage block device |
+| `bdmhdd.irx` | `__bdmhdd_assault` | Internal HDD (DEV9 + ATAD with BDM); optional |
+
+USB path needs `usbd.irx` + `usbhdfsd.irx`.
+HDD path needs `usbd.irx` + `bdmhdd.irx` (HDD must be MBR/GPT + FAT/exFAT, not APA-only).
 
 ## Usage
 
-To use this project you have to place the two IRX binaries provided at the [release section](https://github.com/israpps/BDMAssault/releases) into the path that your app looks for
-
+Place the IRX binaries from the [release section](https://github.com/israpps/BDMAssault/releases) into the paths your app looks for.
 
 ### POPStarter
-- `bdm_assault.irx` must be pasted into `mc?:/POPSTARTER/usbd.irx`
-- `usbd_bd_assault.irx` must be pasted into `mc?:/POPSTARTER/usbhdfsd.irx`
+- `usbd.irx` → `mc?:/POPSTARTER/usbd.irx`
+- `usbhdfsd.irx` → `mc?:/POPSTARTER/usbhdfsd.irx`
+- `bdmhdd.irx` → by caller convention (e.g. OPL HDD slot mapping)
 
 ### FreeMcBoot
-- `bdm_assault.irx` must be pasted into `mc?:/SYS-CONF/USBD.IRX`
-- `usbd_bd_assault.irx` must be pasted into `mc?:/SYS-CONF/USBHDFSD.IRX`
+- `usbd.irx` → `mc?:/SYS-CONF/USBD.IRX`
+- `usbhdfsd.irx` → `mc?:/SYS-CONF/USBHDFSD.IRX`
+- `bdmhdd.irx` → by caller convention
 
 ### FreeHdBoot
-- `bdm_assault.irx` must be pasted into `hdd0:__sysconf/FMCB/USBD.IRX`
-- `usbd_bd_assault.irx` must be pasted into `hdd0:__sysconf/FMCB/USBHDFSD.IRX`
+- `usbd.irx` → `hdd0:__sysconf/FMCB/USBD.IRX`
+- `usbhdfsd.irx` → `hdd0:__sysconf/FMCB/USBHDFSD.IRX`
+- `bdmhdd.irx` → by caller convention
 
 ### old wLaunchELF versions
-- `bdm_assault.irx` must be pasted into the path you configured for `USBD.IRX`
-- `usbd_bd_assault.irx` must be pasted into the path you configured for `USBHDFSD.IRX`
+- `usbd.irx` / `usbhdfsd.irx` / `bdmhdd.irx` → the paths you configured
 
 ### Any other homebrew
 - find out by yourself. I cant remember any other.
