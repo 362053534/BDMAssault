@@ -1,7 +1,7 @@
 #ifndef _MODULE_DEBUG_H
 #define _MODULE_DEBUG_H
 
-#include "../../bdmfs/include/assault_mc_log.h"
+#include "../bdmfs/include/assault_mc_log.h"
 
 // #define MINI_DRIVER
 
