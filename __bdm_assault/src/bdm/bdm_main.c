@@ -21,7 +21,9 @@ int _start(int argc, char *argv[])
     (void)argc;
     (void)argv;
 
-    printf("Block Device Manager (BDM) v%d.%d\n", MAJOR_VER, MINOR_VER);
+    assault_mc_log_init("USBD.LOG");
+    M_PRINTF("Block Device Manager (BDM) v%d.%d\n", MAJOR_VER, MINOR_VER);
+    M_PRINTF("日志: mc?:POPSTARTER/USBD.LOG\n");
 
     if (RegisterLibraryEntries(&_exp_bdm) != 0) {
         M_PRINTF("ERROR: Already registered!\n");

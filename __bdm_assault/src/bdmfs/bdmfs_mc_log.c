@@ -74,7 +74,6 @@ void assault_mc_log_flush(void)
     int oldstat;
     int fd;
 
-    /* 避免等待线程与flush线程同时写MC；也不在栈上开大缓冲 */
     CpuSuspendIntr(&oldstat);
     if (g_flush_busy || g_ring_len <= 0) {
         CpuResumeIntr(oldstat);
@@ -136,7 +135,7 @@ void assault_mc_log_init(const char *filename)
     g_ring_len = 0;
     g_ring[0] = '\0';
     if (!filename)
-        filename = "USBHDFSD.LOG";
+        filename = "USBD.LOG";
 
     for (i = 0; i < 15 && filename[i]; i++)
         g_log_name[i] = filename[i];
@@ -147,7 +146,6 @@ void assault_mc_log_init(const char *filename)
     }
     g_log_ready = 1;
 
-    /* 每次启动清空旧日志 */
     for (slot = 0; slot < 2; slot++) {
         sprintf(path, "mc%d:POPSTARTER", slot);
         mkdir(path);
