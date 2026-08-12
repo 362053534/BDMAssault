@@ -23,6 +23,7 @@ jobs:
           make -C __bdm_assault clean all
           make -C __usbd_bd_assault clean all
           make -C __bdmhdd_assault clean all
+          make -C __mx4sio_assault clean all
 
       - name: Upload IRX artifacts
         if: ${{ success() }}
@@ -34,3 +35,4 @@ jobs:
             usbd.irx
             usbhdfsd.irx
             bdmhdd.irx
+            mx4sio.irx
