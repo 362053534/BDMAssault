@@ -607,35 +607,74 @@ static int fs_getstat(iop_file_t *fd, const char *name, iox_stat_t *stat)
 
 static int get_frag_list(FIL *file, void *rdata, unsigned int rdatalen)
 {
-    bd_fragment_t *f = (bd_fragment_t*)rdata;
-    int iMaxFragments = rdatalen / sizeof(bd_fragment_t);
-    int iFragCount = 0;
+    bd_fragment_t *fragments = (bd_fragment_t *)rdata;
+    struct block_device *bd;
+    QWORD cluster_size;
+    QWORD cluster_count;
+    DWORD cluster_start;
+    DWORD cluster_current;
+    DWORD cluster_next;
+    DWORD clusters_remaining;
+    int fragment_count = 0;
+    int max_fragments = rdata != NULL ? rdatalen / sizeof(bd_fragment_t) : 0;
 
-    // Get the block device backing the file so we can get the starting LBA of the file system.
-    struct block_device* bd = fatfs_fs_driver_get_mounted_bd_from_index(file->obj.fs->pdrv);
+    // 获取文件所在的块设备，以便计算文件系统的起始 LBA。
+    bd = fatfs_fs_driver_get_mounted_bd_from_index(file->obj.fs->pdrv);
+    if (bd == NULL)
+        return -ENXIO;
 
-    DWORD iClusterStart = file->obj.sclust;
-    DWORD iClusterCurrent = iClusterStart;
+    if (file->obj.objsize == 0)
+        return 0;
 
-    do {
-        DWORD iClusterNext = get_fat(&file->obj, iClusterCurrent);
-        if (iClusterNext != (iClusterCurrent + 1)) {
-            // Fragment or file end
-            M_DEBUG("fragment: %uc - %uc + 1\n", iClusterStart, iClusterCurrent + 1);
-            if (iFragCount < iMaxFragments) {
-                u64 sector = clst2sect(file->obj.fs, iClusterStart) + bd->sectorOffset;
-                f[iFragCount].sector = sector;
-                f[iFragCount].count  = clst2sect(file->obj.fs, iClusterCurrent) - clst2sect(file->obj.fs, iClusterStart) + file->obj.fs->csize;
+    cluster_size = (QWORD)file->obj.fs->csize * FF_MAX_SS;
+    cluster_count = (file->obj.objsize - 1) / cluster_size + 1;
+    if (file->obj.fs->n_fatent < 3 || cluster_count == 0 || cluster_count > file->obj.fs->n_fatent - 2 ||
+        file->obj.sclust < 2 || file->obj.sclust >= file->obj.fs->n_fatent)
+        return -EIO;
+
+    cluster_start = file->obj.sclust;
+    cluster_current = cluster_start;
+    clusters_remaining = (DWORD)cluster_count;
+
+    while (clusters_remaining > 1) {
+        cluster_next = get_fat(&file->obj, cluster_current);
+        if (cluster_next == 0xFFFFFFFF || cluster_next < 2 || cluster_next >= file->obj.fs->n_fatent)
+            return -EIO;
+
+        if (cluster_next != cluster_current + 1) {
+            if (fragment_count < max_fragments) {
+                u64 sector = clst2sect(file->obj.fs, cluster_start) + bd->sectorOffset;
+                fragments[fragment_count].sector = sector;
+                fragments[fragment_count].count =
+                    clst2sect(file->obj.fs, cluster_current) - clst2sect(file->obj.fs, cluster_start) + file->obj.fs->csize;
                 DEBUG_U64_2XU32(sector);
-                M_DEBUG(" - sectors: 0x%08x%08x count %u\n", sector_u32[1], sector_u32[0], f[iFragCount].count);
+                M_DEBUG("fragment: %uc - %uc + 1\n", cluster_start, cluster_current + 1);
+                M_DEBUG(" - sectors: 0x%08x%08x count %u\n", sector_u32[1], sector_u32[0], fragments[fragment_count].count);
             }
-            iFragCount++;
-            iClusterStart = iClusterNext;
+            fragment_count++;
+            cluster_start = cluster_next;
         }
-        iClusterCurrent = iClusterNext;
-    } while(iClusterCurrent < file->obj.fs->n_fatent);
 
-    return iFragCount;
+        cluster_current = cluster_next;
+        clusters_remaining--;
+    }
+
+    // 文件占用的最后一个簇之后必须是簇链结束标记。
+    cluster_next = get_fat(&file->obj, cluster_current);
+    if (cluster_next == 0xFFFFFFFF || cluster_next < file->obj.fs->n_fatent)
+        return -EIO;
+
+    if (fragment_count < max_fragments) {
+        u64 sector = clst2sect(file->obj.fs, cluster_start) + bd->sectorOffset;
+        fragments[fragment_count].sector = sector;
+        fragments[fragment_count].count =
+            clst2sect(file->obj.fs, cluster_current) - clst2sect(file->obj.fs, cluster_start) + file->obj.fs->csize;
+        DEBUG_U64_2XU32(sector);
+        M_DEBUG("fragment: %uc - %uc + 1\n", cluster_start, cluster_current + 1);
+        M_DEBUG(" - sectors: 0x%08x%08x count %u\n", sector_u32[1], sector_u32[0], fragments[fragment_count].count);
+    }
+
+    return fragment_count + 1;
 }
 
 //---------------------------------------------------------------------------
@@ -688,7 +727,9 @@ int fs_ioctl2(iop_file_t *fd, int cmd, void *data, unsigned int datalen, void *r
             break;
         }
         case USBMASS_IOCTL_CHECK_CHAIN:
-            ret = get_frag_list(file, NULL, 0) == 1 ? 1 : 0;
+            ret = get_frag_list(file, NULL, 0);
+            if (ret >= 0)
+                ret = ret == 1 ? 1 : 0;
             break;
         case USBMASS_IOCTL_GET_FRAGLIST:
             ret = get_frag_list(file, rdata, rdatalen);

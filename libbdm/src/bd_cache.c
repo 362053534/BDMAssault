@@ -1,4 +1,5 @@
 #include <bd_cache.h>
+#include <errno.h>
 #include <string.h>
 #include <sysmem.h>
 
@@ -55,11 +56,21 @@ static void _invalidate(struct bd_cache *c, u64 sector, u16 count)
 static int _read(struct block_device *bd, u64 sector, void *buffer, u16 count)
 {
     struct bd_cache *c = bd->priv;
+    u16 sectors_to_cache;
+    int read_result;
 
     //M_DEBUG("%s(%d, %d)\n", __FUNCTION__, sector, count);
 
-    if (count >= SECTORS_PER_BLOCK) {
-        // Do a direct read
+    if (count == 0)
+        return 0;
+
+    if (sector >= bd->sectorCount || count > bd->sectorCount - sector)
+        return -EIO;
+
+    /* 缓存按 512 字节扇区分配。若逻辑扇区大小不是 512 字节，则绕过缓存，
+       避免缓存块发生越界。 */
+    if (bd->sectorSize != 512 || count >= SECTORS_PER_BLOCK) {
+        // 直接读取设备
         return c->bd->read(c->bd, sector, buffer, count);
     }
 
@@ -112,8 +123,18 @@ static int _read(struct block_device *bd, u64 sector, void *buffer, u16 count)
     //M_DEBUG("- CACHE READ[%d] -> [block %d] [devread %ds, hit-ratio %d%%]\n", sector, blkidx_best, c->sectors_dev, (c->sectors_cache * 100) / c->sectors_read);
 #endif
 
-    // Fill the block
-    c->bd->read(c->bd, sector, c->cache[blkidx_best], SECTORS_PER_BLOCK);
+    // 填充缓存块，预读范围不能超过设备末尾。
+    sectors_to_cache = SECTORS_PER_BLOCK;
+    if (sectors_to_cache > bd->sectorCount - sector)
+        sectors_to_cache = (u16)(bd->sectorCount - sector);
+
+    /* 发起 I/O 前先使缓存块失效。读取失败或短读时，不能让旧缓存数据在本次
+       或后续调用中被误认为读取成功。 */
+    c->sector[blkidx_best] = 0xffffffffffffffff;
+    read_result = c->bd->read(c->bd, sector, c->cache[blkidx_best], sectors_to_cache);
+    if (read_result != sectors_to_cache)
+        return read_result < 0 ? read_result : -EIO;
+
     c->sector[blkidx_best] = sector;
 
     // Read from cache
@@ -140,7 +161,7 @@ static void _flush(struct block_device *bd)
 
     M_DEBUG("%s\n", __FUNCTION__);
 
-    return c->bd->flush(c->bd);
+    c->bd->flush(c->bd);
 }
 
 static int _stop(struct block_device *bd)
@@ -162,6 +183,14 @@ struct block_device *bd_cache_create(struct block_device *bd)
     struct bd_cache *c = AllocSysMemory(ALLOC_FIRST, sizeof(struct bd_cache), NULL);
 
     M_DEBUG("%s\n", __FUNCTION__);
+
+    if (bd == NULL || cbd == NULL || c == NULL) {
+        if (c != NULL)
+            FreeSysMemory(c);
+        if (cbd != NULL)
+            FreeSysMemory(cbd);
+        return NULL;
+    }
 
     c->bd = bd;
     for (blkidx = 0; blkidx < BLOCK_COUNT; blkidx++) {
@@ -196,6 +225,9 @@ struct block_device *bd_cache_create(struct block_device *bd)
 void bd_cache_destroy(struct block_device *cbd)
 {
     M_DEBUG("%s\n", __FUNCTION__);
+
+    if (cbd == NULL)
+        return;
 
     FreeSysMemory(cbd->priv);
     FreeSysMemory(cbd);
