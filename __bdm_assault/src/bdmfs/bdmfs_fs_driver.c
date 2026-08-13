@@ -630,7 +630,9 @@ static int get_frag_list(FIL *file, void *rdata, unsigned int rdatalen)
     cluster_count = (file->obj.objsize - 1) / cluster_size + 1;
     if (file->obj.fs->n_fatent < 3 || cluster_count == 0 || cluster_count > file->obj.fs->n_fatent - 2 ||
         file->obj.sclust < 2 || file->obj.sclust >= file->obj.fs->n_fatent)
+    {
         return -EIO;
+    }
 
     cluster_start = file->obj.sclust;
     cluster_current = cluster_start;

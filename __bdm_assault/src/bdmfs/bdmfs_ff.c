@@ -3058,7 +3058,6 @@ static FRESULT follow_path (	/* FR_OK(0): successful, !=0: error code */
 	BYTE ns;
 	FATFS *fs = dp->obj.fs;
 
-
 #if FF_FS_RPATH != 0
 	if (!IsSeparator(*path) && (FF_STR_VOLUME_ID != 2 || !IsTerminator(*path))) {	/* Without heading separator */
 		dp->obj.sclust = fs->cdir;			/* Start at the current directory */
@@ -4608,7 +4607,7 @@ FRESULT f_opendir (
 )
 {
 	FRESULT res;
-	FATFS *fs;
+	FATFS *fs = 0;
 	DEF_NAMBUF
 
 
