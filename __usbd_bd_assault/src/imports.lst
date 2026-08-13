@@ -14,6 +14,7 @@ sysmem_IMPORTS_end
 sysclib_IMPORTS_start
 I_memcpy
 I_memset
+I_strtol
 sysclib_IMPORTS_end
 
 intrman_IMPORTS_start

@@ -2,7 +2,6 @@
 #define MINOR_VER 1
 
 #include "include/scsi.h"
-#include <bdm.h>
 #include <ioman.h>
 #include <io_common.h>
 #include <irx.h>
@@ -69,7 +68,7 @@ static int usb_mass_has_pops(int unit)
     return 0;
 }
 
-/* 只探测、不重挂；找到任意massN:/POPS即提前返回。 */
+/* 只探测、不重挂、不写MC；找到任意massN:/POPS即提前返回 */
 static void usb_wait_pops_ready(void)
 {
     unsigned int waited;
