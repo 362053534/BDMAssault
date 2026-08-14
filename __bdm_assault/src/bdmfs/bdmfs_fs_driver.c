@@ -143,6 +143,25 @@ struct block_device *fatfs_fs_driver_get_mounted_bd_from_index(int mount_info_in
     return mounted_bd;
 }
 
+int bdm_is_usb_fatfs_ready(void)
+{
+    struct block_device *mounted_bd;
+    int ready = 0;
+    int i;
+
+    _fs_lock();
+    for (i = 0; i < FATFS_FS_DRIVER_MOUNT_INFO_MAX; i += 1) {
+        mounted_bd = fs_driver_mount_info[i].mounted_bd;
+        if (mounted_bd && mounted_bd->name && strcmp(mounted_bd->name, "usb") == 0) {
+            ready = 1;
+            break;
+        }
+    }
+    _fs_unlock();
+
+    return ready;
+}
+
 static FRESULT fatfs_fs_driver_mount_bd(int mount_info_index, struct block_device *bd)
 {
     int ret;

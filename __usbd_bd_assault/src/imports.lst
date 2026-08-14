@@ -50,4 +50,5 @@ thbase_IMPORTS_end
 bdm_IMPORTS_start
 I_bdm_connect_bd
 I_bdm_disconnect_bd
+I_bdm_is_usb_fatfs_ready
 bdm_IMPORTS_end
