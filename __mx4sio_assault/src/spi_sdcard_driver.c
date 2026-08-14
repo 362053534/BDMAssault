@@ -1,4 +1,5 @@
 #include <bdm.h>
+#include <errno.h>
 #include <stdint.h>
 #include <thevent.h>
 #include <thbase.h>
@@ -299,13 +300,15 @@ int spisd_get_card_info()
     /* 16 bytes + 2 byte CRC16 */
     uint8_t reg_data[18];
 
+    bd.sectorCount = 0;
+
     /* send CMD9, read CSD */
     uint8_t result = spisd_send_cmd(CMD9, 0);
     if (result != 0x0) {
         return result;
     }
 
-    result = spisd_read_register(sdcard.csd, sizeof(reg_data));
+    result = spisd_read_register(reg_data, sizeof(reg_data));
 
     /* dummy write between reg reads */
     mx_sio2_write_dummy();
@@ -313,6 +316,9 @@ int spisd_get_card_info()
     if (result != 0x0) {
         return SPISD_RESULT_ERROR;
     }
+
+    for (unsigned int i = 0; i < sizeof(sdcard.csd); i++)
+        sdcard.csd[i] = reg_data[i];
 
     /* send CMD10, read CID */
     result = spisd_send_cmd(CMD10, 0);
@@ -355,7 +361,7 @@ int spisd_get_card_info()
     /* Byte 12 */
     sdcard.cid.ProdSN |= reg_data[12];
     /* Byte 13 */
-    sdcard.cid.Reserved1 |= (reg_data[13] & 0xF0) >> 4;
+    sdcard.cid.Reserved1 = (reg_data[13] & 0xF0) >> 4;
     /* Byte 14 */
     sdcard.cid.ManufactDate = (reg_data[13] & 0x0F) << 8;
     /* Byte 15 */
@@ -370,17 +376,22 @@ int spisd_get_card_info()
     if (csdv1->csd_structure == 0) {
         unsigned int c_size_mult = (csdv1->c_size_multHi << 1) | csdv1->c_size_multLo;
         unsigned int c_size      = (csdv1->c_sizeHi << 10) | (csdv1->c_sizeMd << 2) | csdv1->c_sizeLo;
-        unsigned int blockNr     = (c_size + 1) << (c_size_mult + 2);
-        unsigned int blockLen    = 1 << csdv1->read_bl_len;
-        unsigned int capacity    = blockNr * blockLen;
+        uint64_t blockNr         = ((uint64_t)c_size + 1) << (c_size_mult + 2);
+        uint64_t blockLen        = (uint64_t)1 << csdv1->read_bl_len;
+        uint64_t capacity        = blockNr * blockLen;
 
         bd.sectorCount = capacity / 512;
 
     /* CSD v2 - SDHC, SDXC */
     } else if (csdv1->csd_structure == 1) {
         unsigned int c_size = (csdv2->c_sizeHi << 16) | (csdv2->c_sizeMd << 8) | csdv2->c_sizeLo;
-        bd.sectorCount = (c_size + 1) * 1024;
+        bd.sectorCount = ((uint64_t)c_size + 1) * 1024;
+    } else {
+        return SPISD_RESULT_ERROR;
     }
+
+    if (bd.sectorCount == 0)
+        return SPISD_RESULT_ERROR;
 
     M_PRINTF("%lu %u-byte logical blocks: (%luMB / %luMiB)\n", (u32)bd.sectorCount, bd.sectorSize, (u32)bd.sectorCount / ((1000 * 1000) / bd.sectorSize), (u32)bd.sectorCount / ((1024 * 1024) / bd.sectorSize));
 
@@ -648,7 +659,7 @@ int spisd_read(struct block_device *bd, uint64_t sector, void *buffer, uint16_t 
 
     mx_sio2_unlock(INTR_RX);
 
-    return count - sectors_left;
+    return sectors_left == 0 ? count : -EIO;
 }
 
 int spisd_write(struct block_device *bd, uint64_t sector, const void *buffer, uint16_t count)
@@ -713,7 +724,7 @@ int spisd_write(struct block_device *bd, uint64_t sector, const void *buffer, ui
     /* 恢复调用者的原始缓冲区内容 */
     reverse_buffer((uint32_t *)buffer, ((count * SECTOR_SIZE) / 4));
 
-    return count - sectors_left;
+    return sectors_left == 0 ? count : -EIO;
 }
 
 void spisd_flush(struct block_device *bd)

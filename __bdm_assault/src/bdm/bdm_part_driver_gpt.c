@@ -48,7 +48,7 @@ int part_connect_gpt(struct block_device *bd)
 
     // Read the GPT partition table header from the block device.
     ret = bd->read(bd, 1, pGptHeader, 1);
-    if (ret < 0)
+    if (ret != 1)
     {
         // Failed to read gpt partition table header.
         M_DEBUG("Failed to read GPT partition table header %d\n", ret);
@@ -81,7 +81,7 @@ int part_connect_gpt(struct block_device *bd)
         {
             // Read the next sector from the block device.
             ret = bd->read(bd, pGptHeader->partition_table_lba + (i / entriesPerSector), pGptPartitionEntry, 1);
-            if (ret < 0)
+            if (ret != 1)
             {
                 // Failed to read the next sector from the drive.
 #ifdef DEBUG

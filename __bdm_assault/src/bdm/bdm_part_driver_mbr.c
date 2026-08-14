@@ -35,10 +35,11 @@ int part_connect_mbr(struct block_device *bd)
 
     // Read the MBR block from the block device.
     ret = bd->read(bd, 0, pMbrBlock, 1);
-    if (ret < 0)
+    if (ret != 1)
     {
         // Failed to read MBR block from the block device.
         M_DEBUG("Failed to read MBR sector from block device %d\n", ret);
+        FreeSysMemory(pMbrBlock);
         return rval;
     }
 
