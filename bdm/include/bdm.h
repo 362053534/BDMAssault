@@ -65,6 +65,7 @@ void bdm_get_bd(struct block_device **pbd, unsigned int count);
 void bdm_RegisterCallback(bdm_cb cb);
 /* enable非0：仅允许name为ata的块设备接入（BDM HDD POPS屏蔽USB） */
 void bdm_set_ata_only(int enable);
+int bdm_is_usb_fatfs_ready(void);
 
 #define bdm_IMPORTS_start DECLARE_IMPORT_TABLE(bdm, 1, 1)
 #define bdm_IMPORTS_end   END_IMPORT_TABLE
@@ -76,5 +77,6 @@ void bdm_set_ata_only(int enable);
 #define I_bdm_get_bd           DECLARE_IMPORT(8, bdm_get_bd)
 #define I_bdm_RegisterCallback DECLARE_IMPORT(9, bdm_RegisterCallback)
 #define I_bdm_set_ata_only     DECLARE_IMPORT(10, bdm_set_ata_only)
+#define I_bdm_is_usb_fatfs_ready DECLARE_IMPORT(11, bdm_is_usb_fatfs_ready)
 
 #endif
