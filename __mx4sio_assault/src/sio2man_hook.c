@@ -226,8 +226,10 @@ void sio2man_hook_deinit()
         ioplib_relinkExports(lib);
     }
 
-    // Unhook 'loadcore'
-    ioplib_hookExportEntry(lib, 6, pRegisterLibraryEntries);
+    /* 恢复loadcore的注册入口。 */
+    lib = ioplib_getByName("loadcore");
+    if (lib)
+        ioplib_hookExportEntry(lib, 6, pRegisterLibraryEntries);
 
     // Delete locking semaphore
     DeleteSema(lock_sema);

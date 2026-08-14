@@ -23,6 +23,7 @@
 
 /* SIO2 can only transfer 256 bytes at a time */
 #define SIO2_MAX_TRANSFER_SIZE 256
+#define SIO2_STAT_TIMEOUT      0x100000
 
 /* interrupt event flags */
 #define EF_SIO2_INTR_REVERSE  0x00000100
@@ -64,8 +65,8 @@ extern void mx_sio2_set_baud(uint8_t baud);
 extern uint8_t mx_sio2_write_byte(uint8_t byte);
 extern uint8_t mx_sio2_write_dummy(void);
 
-extern void mx_sio2_rx_pio(uint8_t *buffer, uint32_t size); /* PIO only used for sending commands */
-extern void mx_sio2_tx_pio(uint8_t *buffer, uint32_t size);
+extern int mx_sio2_rx_pio(uint8_t *buffer, uint32_t size); /* PIO only used for sending commands */
+extern int mx_sio2_tx_pio(uint8_t *buffer, uint32_t size);
 
 extern void mx_sio2_start_rx_dma(uint8_t *buffer); /* DMA used for all other transfers */
 extern void mx_sio2_start_tx_dma(uint8_t *buffer);

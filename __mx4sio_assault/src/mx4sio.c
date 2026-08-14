@@ -23,9 +23,22 @@ dma_command_t cmd;
 int sio2_event_flag;
 
 static int sd_detect_thread_id = -1;
+static volatile int sd_detect_thread_stop = 0;
 static sio2_transfer_data_t global_td;
 static uint8_t sio2_current_baud = SIO2_BAUD_DIV_SLOW;
 static uint32_t sio2_save_crtl;
+
+static int mx_sio2_wait_transfer_complete(void)
+{
+    uint32_t timeout = SIO2_STAT_TIMEOUT;
+
+    while ((inl_sio2_stat6c_get() & (1 << 12)) == 0) {
+        if (timeout-- == 0)
+            return 0;
+    }
+
+    return 1;
+}
 
 /* ISR triggered by the completion of DMA transfer: SIO2 RX FIFO -> MEM */
 int mx_sio2_dma_isr_rx(void *arg)
@@ -37,8 +50,12 @@ int mx_sio2_dma_isr_rx(void *arg)
     inl_sio2_stat_set(inl_sio2_stat_get());
 
     /* wait for PIO portion of transfer to complete */
-    while ((inl_sio2_stat6c_get() & (1 << 12)) == 0)
-        ;
+    if (!mx_sio2_wait_transfer_complete()) {
+        cmd.response = SPISD_RESULT_TIMEOUT;
+        cmd.abort = CMD_ABORT_TRANSFER_TIMEOUT;
+        iSetEventFlag(ef, EF_SIO2_INTR_COMPLETE);
+        return 1;
+    }
 
 #ifdef CONFIG_USE_CRC16
     /* get CRC16 bytes from RX FIFO */
@@ -95,14 +112,16 @@ int mx_sio2_dma_isr_tx(void *arg)
      * have completed the transfer prior to reaching this ISR */
 
     /* wait for transfer to complete */
-    while ((inl_sio2_stat6c_get() & (1 << 12)) == 0)
-        ;
+    if (!mx_sio2_wait_transfer_complete()) {
+        cmd.response = SPISD_RESULT_TIMEOUT;
+        cmd.abort = CMD_ABORT_TRANSFER_TIMEOUT;
+        iSetEventFlag(ef, EF_SIO2_INTR_COMPLETE);
+        return 1;
+    }
 
     /* CRC16 not yet implemented for writes */
     mx_sio2_write_dummy();
     mx_sio2_write_dummy();
-
-    cmd.sectors_transferred++;
 
     /* get data response token */
     /* 0101 = data accepted */
@@ -111,15 +130,18 @@ int mx_sio2_dma_isr_tx(void *arg)
     cmd.response = mx_sio2_wait_equal_masked(0x5, 0x1F, 10);
     if (cmd.response != 0x5) {
         M_DEBUG("ERROR: write data rejected, token 0x%x\n", cmd.response);
-        cmd.abort = 1;
+        cmd.abort = CMD_ABORT_WRITE_ERROR;
     }
 
     /* wait for card to finish programming */
     cmd.response = mx_sio2_wait_equal(0xFF, 0x80000);
     if (cmd.response != SPISD_RESULT_OK) {
         M_DEBUG("ERROR: failed to finish programming\n");
-        cmd.abort = 1;
+        cmd.abort = CMD_ABORT_WRITE_ERROR;
     }
+
+    if (cmd.abort == 0)
+        cmd.sectors_transferred++;
 
     if (cmd.sectors_transferred < cmd.sector_count && cmd.abort == 0) {
         /* send write token */
@@ -202,13 +224,23 @@ void mx_sio2_unlock(uint8_t intr_type)
     /* disable DMA interrupts */
     CpuSuspendIntr(&state);
 
-    if (intr_type == INTR_RX)
+    if (intr_type == INTR_RX) {
         DisableIntr(IOP_IRQ_DMA_SIO2_OUT, &res);
+        dmac_ch_set_chcr(IOP_DMAC_SIO2out, 0);
+    }
 
-    if (intr_type == INTR_TX)
+    if (intr_type == INTR_TX) {
         DisableIntr(IOP_IRQ_DMA_SIO2_IN, &res);
+        dmac_ch_set_chcr(IOP_DMAC_SIO2in, 0);
+    }
 
     CpuResumeIntr(state);
+
+    if (intr_type == INTR_RX)
+        ReleaseIntrHandler(IOP_IRQ_DMA_SIO2_OUT);
+
+    if (intr_type == INTR_TX)
+        ReleaseIntrHandler(IOP_IRQ_DMA_SIO2_IN);
 
     /* restore ctrl state, and reset STATE + FIFOS */
     inl_sio2_ctrl_set(sio2_save_crtl | 0xc);
@@ -250,8 +282,8 @@ uint8_t mx_sio2_write_byte(uint8_t byte)
     inl_sio2_ctrl_set(inl_sio2_ctrl_get() | 1);
 
     /* wait for completion */
-    while ((inl_sio2_stat6c_get() & (1 << 12)) == 0)
-        ;
+    if (!mx_sio2_wait_transfer_complete())
+        return 0xFF;
 
 #ifdef DEBUG_VERBOSE
     uint8_t rx = reverse_byte_LUT8[inl_sio2_data_in()];
@@ -289,8 +321,8 @@ uint8_t mx_sio2_write_dummy(void)
     inl_sio2_ctrl_set(inl_sio2_ctrl_get() | 1);
 
     /* wait for completion */
-    while ((inl_sio2_stat6c_get() & (1 << 12)) == 0)
-        ;
+    if (!mx_sio2_wait_transfer_complete())
+        return 0xFF;
 
 #ifdef DEBUG_VERBOSE
     uint8_t rx = reverse_byte_LUT8[inl_sio2_data_in()];
@@ -329,8 +361,8 @@ uint8_t mx_sio2_wait_equal(uint8_t value, uint32_t count)
         inl_sio2_ctrl_set(inl_sio2_ctrl_get() | 1);
 
         /* wait for completion */
-        while ((inl_sio2_stat6c_get() & (1 << 12)) == 0)
-            ;
+        if (!mx_sio2_wait_transfer_complete())
+            return SPISD_RESULT_TIMEOUT;
 
         in_byte = inl_sio2_data_in();
 
@@ -371,8 +403,8 @@ uint8_t mx_sio2_wait_not_equal(uint8_t value, uint32_t count)
         inl_sio2_ctrl_set(inl_sio2_ctrl_get() | 1);
 
         /* wait for completion */
-        while ((inl_sio2_stat6c_get() & (1 << 12)) == 0)
-            ;
+        if (!mx_sio2_wait_transfer_complete())
+            return 0xFF;
 
         /* get byte from RX FIFO */
         in_byte = inl_sio2_data_in();
@@ -413,8 +445,8 @@ uint8_t mx_sio2_wait_equal_masked(uint8_t value, uint8_t mask, uint32_t count)
         inl_sio2_ctrl_set(inl_sio2_ctrl_get() | 1);
 
         /* wait for completion */
-        while ((inl_sio2_stat6c_get() & (1 << 12)) == 0)
-            ;
+        if (!mx_sio2_wait_transfer_complete())
+            return 0xFF;
 
         in_byte = inl_sio2_data_in();
 
@@ -429,7 +461,7 @@ uint8_t mx_sio2_wait_equal_masked(uint8_t value, uint8_t mask, uint32_t count)
     return reverse_byte_LUT8[in_byte];
 }
 
-void mx_sio2_rx_pio(uint8_t *buffer, uint32_t size)
+int mx_sio2_rx_pio(uint8_t *buffer, uint32_t size)
 {
     uint32_t transfer_size;
 #ifdef DEBUG_VERBOSE
@@ -460,8 +492,8 @@ void mx_sio2_rx_pio(uint8_t *buffer, uint32_t size)
         inl_sio2_ctrl_set(inl_sio2_ctrl_get() | 1);
 
         /* wait for completion */
-        while ((inl_sio2_stat6c_get() & (1 << 12)) == 0)
-            ;
+        if (!mx_sio2_wait_transfer_complete())
+            return SPISD_RESULT_TIMEOUT;
 
         /* PIO: IOP <- SIO2 */
         for (int i = 0; i < transfer_size; i++) {
@@ -476,9 +508,11 @@ void mx_sio2_rx_pio(uint8_t *buffer, uint32_t size)
 
         size -= transfer_size;
     }
+
+    return SPISD_RESULT_OK;
 }
 
-void mx_sio2_tx_pio(uint8_t *buffer, uint32_t size)
+int mx_sio2_tx_pio(uint8_t *buffer, uint32_t size)
 {
     uint32_t transfer_size;
 
@@ -521,8 +555,8 @@ void mx_sio2_tx_pio(uint8_t *buffer, uint32_t size)
         inl_sio2_ctrl_set(inl_sio2_ctrl_get() | 1);
 
         /* wait for completion */
-        while ((inl_sio2_stat6c_get() & (1 << 12)) == 0)
-            ;
+        if (!mx_sio2_wait_transfer_complete())
+            return SPISD_RESULT_TIMEOUT;
 
 #ifdef DEBUG_VERBOSE
         for (int i = 0; i < transfer_size; i++) {
@@ -531,6 +565,8 @@ void mx_sio2_tx_pio(uint8_t *buffer, uint32_t size)
 #endif
         size -= transfer_size;
     }
+
+    return SPISD_RESULT_OK;
 }
 
 void mx_sio2_start_rx_dma(uint8_t *buffer)
@@ -654,14 +690,19 @@ static void sd_detect_thread(void *arg)
 
     M_PRINTF("card detection thread running\n");
 
-    while (1) {
+    while (!sd_detect_thread_stop) {
         DelayThread(1000 * 1000);
+
+        if (sd_detect_thread_stop)
+            break;
 
         /* try to detect card removal if it hasn't been used recently */
         if (sdcard.used == 0)
             sd_detect();
         sdcard.used = 0;
     }
+
+    ExitDeleteThread();
 }
 
 
@@ -775,7 +816,7 @@ int module_start(int argc, char *argv[])
      * - followed by an infinite amount of 0xff
      */
     mx_sio2_lock(INTR_NONE);
-    mx_sio2_rx_pio((void *)&rv, 4);
+    (void)mx_sio2_rx_pio((void *)&rv, 4);
     mx_sio2_unlock(INTR_NONE);
 
     /* create SD card detection thread */
@@ -798,6 +839,7 @@ int module_start(int argc, char *argv[])
     }
 
     /* Start thread */
+    sd_detect_thread_stop = 0;
     rv = StartThread(sd_detect_thread_id, NULL);
     if (rv < 0) {
         M_PRINTF("ERROR: StartThread returned %d\n", rv);
@@ -833,6 +875,8 @@ error1:
 
 int module_stop(int argc, char *argv[])
 {
+    iop_thread_info_t thread_info;
+
 #ifndef MINI_DRIVER
     int i;
 
@@ -844,7 +888,18 @@ int module_stop(int argc, char *argv[])
     (void)argv;
 #endif
 
-    DeleteThread(sd_detect_thread_id);
+    sd_detect_thread_stop = 1;
+    while (ReferThreadStatus(sd_detect_thread_id, &thread_info) >= 0)
+        DelayThread(1000);
+    sd_detect_thread_id = -1;
+
+    if (sdcard.initialized) {
+        mx_sio2_lock(INTR_NONE);
+        bdm_disconnect_bd(&bd);
+        sdcard.initialized = 0;
+        mx_sio2_unlock(INTR_NONE);
+    }
+
     sio2man_hook_deinit();
     DeleteEventFlag(sio2_event_flag);
 

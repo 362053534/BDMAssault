@@ -80,7 +80,8 @@ static uint8_t spisd_send_cmd(uint8_t cmd, uint32_t arg)
     packet[CMD_CRC_OFFSET] = CRC7_SHIFT_MASK(crc7(packet, CMD_CRC_OFFSET));
 
     /* begin SIO2 PIO TX transfer */
-    mx_sio2_tx_pio(packet, sizeof(packet));
+    if (mx_sio2_tx_pio(packet, sizeof(packet)) != SPISD_RESULT_OK)
+        return 0xFF;
 
     /* discard extra data on CMD12 */
     if (cmd == CMD12)
@@ -107,13 +108,15 @@ static uint8_t spisd_send_cmd_recv_data(uint8_t cmd, uint32_t arg, uint8_t *data
     packet[CMD_CRC_OFFSET] = CRC7_SHIFT_MASK(crc7(packet, CMD_CRC_OFFSET));
 
     /* begin SIO2 PIO TX transfer */
-    mx_sio2_tx_pio(packet, sizeof(packet));
+    if (mx_sio2_tx_pio(packet, sizeof(packet)) != SPISD_RESULT_OK)
+        return 0xFF;
 
     /* wait for card to respond */
     response = mx_sio2_wait_not_equal(0xFF, CMD_WAIT_RESP_TIMEOUT);
     if (response != 0xFF) {
         /* start SIO2 PIO RX transfer */
-        mx_sio2_rx_pio(data, size);
+        if (mx_sio2_rx_pio(data, size) != SPISD_RESULT_OK)
+            response = 0xFF;
     }
 
     mx_sio2_write_dummy();
@@ -128,7 +131,7 @@ static uint8_t spisd_read_register(uint8_t *buff, uint32_t len)
     results = mx_sio2_wait_equal(0xFE, 2000);
     if (results == SPISD_RESULT_OK) {
         /* got read token, start SIO2 PIO RX transfer */
-        mx_sio2_rx_pio(buff, len);
+        results = mx_sio2_rx_pio(buff, len);
     }
 
     return results;
@@ -409,8 +412,10 @@ int spisd_recover()
             sdcard.baud = SIO2_BAUD_DIV_COMPAT;
 
         /* flush 256 bytes */
-        for (int i = 0; i < 64; i++)
-            mx_sio2_rx_pio((void *)&rv, 4);
+        for (int i = 0; i < 64; i++) {
+            if (mx_sio2_rx_pio((void *)&rv, 4) != SPISD_RESULT_OK)
+                return SPISD_RESULT_ERROR;
+        }
 
         if (spisd_init_card() != SPISD_RESULT_OK) {
             M_DEBUG("recovery failed to reinit card!\n");
@@ -426,6 +431,19 @@ int spisd_recover()
 
     M_DEBUG("recovery failed to get card info!\n");
     return SPISD_RESULT_ERROR;
+}
+
+static int spisd_wait_dma_event(uint32_t bits, uint32_t *resbits)
+{
+    uint32_t polls;
+
+    for (polls = 0; polls < DMA_EVENT_TIMEOUT_POLLS; polls++) {
+        if (PollEventFlag(sio2_event_flag, bits, 1, resbits) == 0)
+            return SPISD_RESULT_OK;
+        DelayThread(DMA_EVENT_POLL_DELAY);
+    }
+
+    return SPISD_RESULT_TIMEOUT;
 }
 
 /* read functions */
@@ -462,6 +480,8 @@ static int spisd_read_multi_do(void *buffer, uint16_t count)
     cmd.response            = SPISD_RESULT_OK;
     cmd.abort               = 0;
 
+    ClearEventFlag(sio2_event_flag, ~(EF_SIO2_INTR_REVERSE | EF_SIO2_INTR_COMPLETE));
+
     /* start first DMA transfer */
     mx_sio2_start_rx_dma(buffer);
 
@@ -469,7 +489,10 @@ static int spisd_read_multi_do(void *buffer, uint16_t count)
     while (1) {
         uint32_t resbits;
 
-        WaitEventFlag(sio2_event_flag, EF_SIO2_INTR_REVERSE | EF_SIO2_INTR_COMPLETE, 1, &resbits);
+        if (spisd_wait_dma_event(EF_SIO2_INTR_REVERSE | EF_SIO2_INTR_COMPLETE, &resbits) != SPISD_RESULT_OK) {
+            cmd.abort = CMD_ABORT_TRANSFER_TIMEOUT;
+            break;
+        }
 
         if (resbits & EF_SIO2_INTR_REVERSE) {
             ClearEventFlag(sio2_event_flag, ~EF_SIO2_INTR_REVERSE);
@@ -503,13 +526,13 @@ static int spisd_read_multi_do(void *buffer, uint16_t count)
     return cmd.sectors_reversed;
 }
 
-static void spisd_read_multi_end()
+static int spisd_read_multi_end()
 {
     /* 0xFE token will be received in the ISR prior to this function being called
      * ensuring the start of CMD12 is aligned with the end of 0xFE
      * See 7.5.2.2 Stop Transmission Timing of the SD Physical Layer Specification
      * for more details */
-    spisd_send_cmd(CMD12, 0);
+    return spisd_send_cmd(CMD12, 0);
 }
 
 /* write functions */
@@ -555,6 +578,8 @@ static int spisd_write_multi_do(void* buffer, uint16_t count)
     cmd.response            = SPISD_RESULT_OK;
     cmd.abort               = 0;
 
+    ClearEventFlag(sio2_event_flag, ~(EF_SIO2_INTR_REVERSE | EF_SIO2_INTR_COMPLETE));
+
     /* send initial write token */
     mx_sio2_write_byte(0xFC);
 
@@ -562,7 +587,10 @@ static int spisd_write_multi_do(void* buffer, uint16_t count)
     mx_sio2_start_tx_dma(buffer);
 
     /* wait for transfer to complete */
-    WaitEventFlag(sio2_event_flag, EF_SIO2_INTR_COMPLETE, 1, &resbits);
+    if (spisd_wait_dma_event(EF_SIO2_INTR_COMPLETE, &resbits) != SPISD_RESULT_OK) {
+        cmd.abort = CMD_ABORT_TRANSFER_TIMEOUT;
+        return cmd.sectors_transferred;
+    }
 
     if (resbits & EF_SIO2_INTR_COMPLETE) {
         ClearEventFlag(sio2_event_flag, ~EF_SIO2_INTR_COMPLETE);
@@ -605,6 +633,7 @@ int spisd_read(struct block_device *bd, uint64_t sector, void *buffer, uint16_t 
     uint16_t sectors_left = count;
     uint16_t results = 0;
     uint16_t retries = 0;
+    int request_failed = 0;
 
     (void)bd;
 
@@ -649,8 +678,28 @@ int spisd_read(struct block_device *bd, uint64_t sector, void *buffer, uint16_t 
                 continue;
             }
         }
+
+        if (cmd.abort == CMD_ABORT_TRANSFER_TIMEOUT) {
+            mx_sio2_unlock(INTR_RX);
+            mx_sio2_lock(INTR_RX);
+            if (spisd_recover() != SPISD_RESULT_OK) {
+                request_failed = 1;
+                break;
+            }
+
+            retries++;
+            continue;
+        }
+
         /* send CMD12, end transfer */
-        spisd_read_multi_end();
+        results = spisd_read_multi_end();
+        if (results != SPISD_RESULT_OK) {
+            M_DEBUG("ERROR: failed to end multi-block read\n");
+            if (spisd_recover() != SPISD_RESULT_OK) {
+                request_failed = 1;
+                break;
+            }
+        }
 
         retries++;
     }
@@ -659,7 +708,7 @@ int spisd_read(struct block_device *bd, uint64_t sector, void *buffer, uint16_t 
 
     mx_sio2_unlock(INTR_RX);
 
-    return sectors_left == 0 ? count : -EIO;
+    return sectors_left == 0 && !request_failed ? count : -EIO;
 }
 
 int spisd_write(struct block_device *bd, uint64_t sector, const void *buffer, uint16_t count)
@@ -669,6 +718,7 @@ int spisd_write(struct block_device *bd, uint64_t sector, const void *buffer, ui
     uint16_t sectors_left = count;
     uint16_t results = 0;
     uint16_t retries = 0;
+    int request_failed = 0;
 
     if (count == 0)
         return 0;
@@ -707,11 +757,26 @@ int spisd_write(struct block_device *bd, uint64_t sector, const void *buffer, ui
             M_DEBUG("ERROR: failed to write all sectors, wrote: %i\n", results);
         }
 
+        if (cmd.abort == CMD_ABORT_TRANSFER_TIMEOUT) {
+            mx_sio2_unlock(INTR_TX);
+            mx_sio2_lock(INTR_TX);
+            if (spisd_recover() != SPISD_RESULT_OK) {
+                request_failed = 1;
+                break;
+            }
+
+            retries++;
+            continue;
+        }
+
         /* send 0xFD, end transfer */
         results = spisd_write_multi_end();
         if (results != SPISD_RESULT_OK) {
             M_DEBUG("ERROR: failed to end multi-block write\n");
-            break;
+            if (spisd_recover() != SPISD_RESULT_OK) {
+                request_failed = 1;
+                break;
+            }
         }
 
         retries++;
@@ -724,7 +789,7 @@ int spisd_write(struct block_device *bd, uint64_t sector, const void *buffer, ui
     /* 恢复调用者的原始缓冲区内容 */
     reverse_buffer((uint32_t *)buffer, ((count * SECTOR_SIZE) / 4));
 
-    return sectors_left == 0 ? count : -EIO;
+    return sectors_left == 0 && !request_failed ? count : -EIO;
 }
 
 void spisd_flush(struct block_device *bd)
