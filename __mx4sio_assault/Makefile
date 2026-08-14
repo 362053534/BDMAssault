@@ -4,6 +4,8 @@
 IOP_BIN = mx4sio.irx
 MX4SIO_BIN = ../mx4sio.irx
 
+IOP_INCS += -I../bdm/include
+
 IOP_IMPORT_INCS += \
 	fs/bdm \
 	sio/sio2man \

@@ -790,6 +790,13 @@ int module_start(int argc, char *argv[])
         goto error3;
     }
 
+    /* 同步初始化SD卡，并等待对应的FatFs挂载完成。 */
+    while (!bdm_is_fatfs_ready("sdc")) {
+        if (!sdcard.initialized)
+            sd_detect();
+        DelayThread(200 * 1000);
+    }
+
     /* Start thread */
     rv = StartThread(sd_detect_thread_id, NULL);
     if (rv < 0) {
@@ -811,6 +818,10 @@ int module_start(int argc, char *argv[])
     return MODULE_RESIDENT_END;
 
 error4:
+    if (sdcard.initialized) {
+        bdm_disconnect_bd(&bd);
+        sdcard.initialized = 0;
+    }
     DeleteThread(sd_detect_thread_id);
 error3:
     sio2man_hook_deinit();

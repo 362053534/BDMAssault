@@ -13,6 +13,7 @@ DECLARE_EXPORT_TABLE(bdm, 1, 1)
 	DECLARE_EXPORT(bdm_RegisterCallback)
 	DECLARE_EXPORT(bdm_set_ata_only)
 	DECLARE_EXPORT(bdm_is_usb_fatfs_ready)
+	DECLARE_EXPORT(bdm_is_fatfs_ready)
 END_EXPORT_TABLE
 
 void _retonly() {}
