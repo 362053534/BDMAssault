@@ -69,6 +69,10 @@
 static int ata_devinfo_init = 0;
 static int ata_evflg        = -1;
 
+#ifdef ATA_ENABLE_BDM
+int atad_probe(void);
+#endif
+
 // Workarounds
 static u8 ata_dvrp_workaround = 0; // Please read the comments in _start().
 #ifdef ATA_USE_DEV9
@@ -379,8 +383,7 @@ int _start(int argc, char *argv[])
         goto out;
     }
 
-    sceAtaInit(0);
-    sceAtaInit(1);
+    atad_probe();
 #else
     if (RegisterLibraryEntries(&_exp_atad) != 0) {
         M_PRINTF("Library is already registered, exiting.\n");
@@ -1451,13 +1454,26 @@ static int ata_init_devices(ata_devinfo_t *devinfo)
 ata_devinfo_t *sceAtaInit(int device)
 {
     if (!ata_devinfo_init) {
-        ata_devinfo_init = 1;
-        if (ata_bus_reset() || ata_init_devices(atad_devinfo))
+        memset(atad_devinfo, 0, sizeof(atad_devinfo));
+        if (ata_bus_reset() || ata_init_devices(atad_devinfo) ||
+            ((!atad_devinfo[0].exists || atad_devinfo[0].has_packet) &&
+             (!atad_devinfo[1].exists || atad_devinfo[1].has_packet))) {
+            memset(atad_devinfo, 0, sizeof(atad_devinfo));
             return NULL;
+        }
+        /* 只有探测到可供BDM使用的ATA硬盘后，才锁定初始化状态。 */
+        ata_devinfo_init = 1;
     }
 
     return &atad_devinfo[device];
 }
+
+#ifdef ATA_ENABLE_BDM
+int atad_probe(void)
+{
+    return sceAtaInit(0) != NULL ? 0 : -1;
+}
+#endif
 
 #ifdef ATA_USE_DEV9
 static void ata_set_dir(int dir)

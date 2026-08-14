@@ -21,6 +21,7 @@ static struct bdm_mounts g_mount[MAX_CONNECTIONS];
 static struct file_system *g_fs[MAX_CONNECTIONS];
 static bdm_cb g_cb       = NULL;
 static int bdm_event     = -1;
+static int bdm_filter_event = -1;
 static int bdm_thread_id = -1;
 /* BDM HDD POPS：只允许ata进BDM，从入口屏蔽USB */
 static int g_ata_only    = 0;
@@ -29,6 +30,7 @@ static int g_ata_only    = 0;
 #define BDM_EVENT_CB_MOUNT  0x01
 #define BDM_EVENT_CB_UMOUNT 0x02
 #define BDM_EVENT_MOUNT     0x04
+#define BDM_EVENT_FILTER    0x08
 
 void bdm_RegisterCallback(bdm_cb cb)
 {
@@ -52,19 +54,15 @@ void bdm_RegisterCallback(bdm_cb cb)
 
 void bdm_set_ata_only(int enable)
 {
-    int i;
-    struct block_device *bd;
+    u32 bits;
 
     g_ata_only = enable ? 1 : 0;
-    if (!g_ata_only)
+    if (bdm_event < 0 || bdm_filter_event < 0)
         return;
 
-    /* 断开已连接的非ATA块设备（如usb） */
-    for (i = 0; i < MAX_CONNECTIONS; ++i) {
-        bd = g_mount[i].bd;
-        if (bd && bd->name && strcmp(bd->name, "ata") != 0)
-            bdm_disconnect_bd(bd);
-    }
+    /* 设备筛选交给BDM线程串行执行，避免与异步挂载同时改动g_mount。 */
+    SetEventFlag(bdm_event, BDM_EVENT_FILTER);
+    WaitEventFlag(bdm_filter_event, 1, WEF_OR | WEF_CLEAR, &bits);
 }
 
 void bdm_connect_bd(struct block_device *bd)
@@ -193,13 +191,27 @@ static void bdm_thread(void *arg)
 {
     u32 EFBits;
     int i;
+    struct block_device *bd;
 
     (void)arg;
 
     M_PRINTF("BDM event thread running\n");
 
     while (1) {
-        WaitEventFlag(bdm_event, BDM_EVENT_CB_MOUNT | BDM_EVENT_CB_UMOUNT | BDM_EVENT_MOUNT, WEF_OR | WEF_CLEAR, &EFBits);
+        WaitEventFlag(bdm_event, BDM_EVENT_CB_MOUNT | BDM_EVENT_CB_UMOUNT | BDM_EVENT_MOUNT | BDM_EVENT_FILTER,
+                      WEF_OR | WEF_CLEAR, &EFBits);
+
+        if (EFBits & BDM_EVENT_FILTER) {
+            if (g_ata_only) {
+                for (i = 0; i < MAX_CONNECTIONS; ++i) {
+                    bd = g_mount[i].bd;
+
+                    if (bd && bd->name && strcmp(bd->name, "ata") != 0)
+                        bdm_disconnect_bd(bd);
+                }
+            }
+            SetEventFlag(bdm_filter_event, 1);
+        }
 
         if (EFBits & BDM_EVENT_MOUNT) {
             // Try to mount any unmounted block devices
@@ -247,6 +259,13 @@ int bdm_init()
         return result;
     }
 
+    result = bdm_filter_event = CreateEventFlag(&EventFlagData);
+    if (result < 0) {
+        M_DEBUG("ERROR: CreateEventFlag %d\n", result);
+        DeleteEventFlag(bdm_event);
+        return result;
+    }
+
     ThreadData.attr      = TH_C;
     ThreadData.thread    = bdm_thread;
     ThreadData.option    = 0;
@@ -255,6 +274,7 @@ int bdm_init()
     result = bdm_thread_id = CreateThread(&ThreadData);
     if (result < 0) {
         M_DEBUG("ERROR: CreateThread %d\n", result);
+        DeleteEventFlag(bdm_filter_event);
         DeleteEventFlag(bdm_event);
         return result;
     }
@@ -263,6 +283,7 @@ int bdm_init()
     if (result < 0) {
         M_DEBUG("ERROR: StartThread %d\n", result);
         DeleteThread(bdm_thread_id);
+        DeleteEventFlag(bdm_filter_event);
         DeleteEventFlag(bdm_event);
         return result;
     }
