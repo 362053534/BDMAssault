@@ -653,7 +653,7 @@ static int get_frag_list(FIL *file, void *rdata, unsigned int rdatalen)
     if (file->obj.objsize == 0)
         return 0;
 
-    cluster_size = (QWORD)file->obj.fs->csize * FF_MAX_SS;
+    cluster_size = (QWORD)file->obj.fs->csize * bd->sectorSize;
     cluster_count = (file->obj.objsize - 1) / cluster_size + 1;
     if (file->obj.fs->n_fatent < 3 || cluster_count == 0 || cluster_count > file->obj.fs->n_fatent - 2 ||
         file->obj.sclust < 2 || file->obj.sclust >= file->obj.fs->n_fatent)

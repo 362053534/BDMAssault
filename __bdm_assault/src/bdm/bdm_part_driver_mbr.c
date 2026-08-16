@@ -24,8 +24,12 @@ int part_connect_mbr(struct block_device *bd)
     if (bd->sectorOffset != 0)
         return rval;
 
-    // Allocate memory for MBR partition sector.
-    pMbrBlock = AllocSysMemory(ALLOC_FIRST, sizeof(master_boot_record), NULL);
+    // 每次底层读取都会写入一个完整逻辑扇区，缓冲区必须按设备扇区大小分配。
+    if (bd->sectorSize < sizeof(master_boot_record) || bd->sectorSize > 4096 ||
+        (bd->sectorSize & (bd->sectorSize - 1)) != 0)
+        return rval;
+
+    pMbrBlock = AllocSysMemory(ALLOC_FIRST, bd->sectorSize, NULL);
     if (pMbrBlock == NULL)
     {
         // Failed to allocate memory for mbr block.
