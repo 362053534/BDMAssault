@@ -35,8 +35,6 @@ bdm_IMPORTS_start
 I_bdm_connect_bd
 I_bdm_set_ata_only
 I_bdm_is_fatfs_ready
-I_bdm_trace_init
-I_bdm_trace_log
 bdm_IMPORTS_end
 
 dmacman_IMPORTS_start
