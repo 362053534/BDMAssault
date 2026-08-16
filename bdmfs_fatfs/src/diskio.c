@@ -129,14 +129,16 @@ DRESULT disk_ioctl(
             mounted_bd->flush(mounted_bd);
             break;
         case GET_SECTOR_COUNT:
-            *(unsigned int *)buff = mounted_bd->sectorCount;
+            *(LBA_t *)buff = (LBA_t)mounted_bd->sectorCount;
             break;
         case GET_SECTOR_SIZE:
-            *(unsigned int *)buff = mounted_bd->sectorSize;
+            *(WORD *)buff = (WORD)mounted_bd->sectorSize;
             break;
         case GET_BLOCK_SIZE:
             *(unsigned int *)buff = 0;
             break;
+        default:
+            return RES_PARERR;
     }
 
     return RES_OK;
