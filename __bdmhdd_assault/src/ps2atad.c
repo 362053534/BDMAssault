@@ -37,6 +37,9 @@
 #ifdef ATA_ENABLE_BDM
 #include <bdm.h>
 #include <errno.h>
+#define ATA_TRACE(...) bdm_trace_log(__VA_ARGS__)
+#else
+#define ATA_TRACE(...)
 #endif
 
 #ifdef ATA_USE_DEV9
@@ -1332,10 +1335,13 @@ static int ata_init_devices(ata_devinfo_t *devinfo)
     int i, res;
     u32 total_sectors_nonlba48, total_sectors_lba48;
 
-    if ((res = sceAtaSoftReset()) != 0)
+    res = sceAtaSoftReset();
+    ATA_TRACE("ATAD_INIT soft_reset ret=%d\n", res);
+    if (res != 0)
         return res;
 
     ata_device_probe(&devinfo[0]);
+    ATA_TRACE("ATAD_INIT probe dev=0 exists=%u packet=%u\n", devinfo[0].exists, devinfo[0].has_packet);
     if (!devinfo[0].exists) {
         M_PRINTF("Error: Unable to detect HDD 0.\n");
         devinfo[1].exists = 0;
@@ -1343,12 +1349,15 @@ static int ata_init_devices(ata_devinfo_t *devinfo)
     }
 
     /* If there is a device 1, grab it's info too.  */
-    if ((res = ata_device_select(1)) != 0)
+    res = ata_device_select(1);
+    ATA_TRACE("ATAD_INIT select dev=1 ret=%d\n", res);
+    if (res != 0)
         return res;
     if (ata_hwport->r_control & 0xff)
         ata_device_probe(&devinfo[1]);
     else
         devinfo[1].exists = 0;
+    ATA_TRACE("ATAD_INIT probe dev=1 exists=%u packet=%u\n", devinfo[1].exists, devinfo[1].has_packet);
 
 #ifdef ATA_USE_DEV9
     ata_pio_mode(0); // PIO mode is set here, in late ATAD versions.
@@ -1357,6 +1366,8 @@ static int ata_init_devices(ata_devinfo_t *devinfo)
     for (i = 0; i < 2; i++) {
         if (!devinfo[i].exists)
             continue;
+
+        res = 0;
 
         /* Send the IDENTIFY DEVICE command. if it doesn't succeed
            devinfo is disabled.  */
@@ -1369,6 +1380,8 @@ static int ata_init_devices(ata_devinfo_t *devinfo)
             res               = ata_device_pkt_identify(i, ata_param);
             devinfo[i].exists = (res == 0);
         }
+        ATA_TRACE("ATAD_INIT identify dev=%d ret=%d exists=%u packet=%u\n",
+                  i, res, devinfo[i].exists, devinfo[i].has_packet);
         /* Otherwise, do nothing if has_packet = 2. */
 
         /* This next section is HDD-specific: if no device or it's a
@@ -1444,6 +1457,9 @@ static int ata_init_devices(ata_devinfo_t *devinfo)
 
 #ifdef ATA_ENABLE_BDM
         g_ata_bd[i].sectorCount = devinfo[i].total_sectors_lba48;
+        ATA_TRACE("ATAD_INIT connect_bdm dev=%d sector_size=%u count=%08x%08x\n",
+                  i, g_ata_bd[i].sectorSize,
+                  ((u32 *)&g_ata_bd[i].sectorCount)[1], ((u32 *)&g_ata_bd[i].sectorCount)[0]);
         bdm_connect_bd(&g_ata_bd[i]);
 #endif
     }
@@ -1454,10 +1470,20 @@ static int ata_init_devices(ata_devinfo_t *devinfo)
 ata_devinfo_t *sceAtaInit(int device)
 {
     if (!ata_devinfo_init) {
+        int reset_result;
+        int init_result;
+        int usable;
+
+        ATA_TRACE("ATAD_PROBE begin device=%d\n", device);
         memset(atad_devinfo, 0, sizeof(atad_devinfo));
-        if (ata_bus_reset() || ata_init_devices(atad_devinfo) ||
-            ((!atad_devinfo[0].exists || atad_devinfo[0].has_packet) &&
-             (!atad_devinfo[1].exists || atad_devinfo[1].has_packet))) {
+        reset_result = ata_bus_reset();
+        init_result = reset_result == 0 ? ata_init_devices(atad_devinfo) : -1;
+        usable = (atad_devinfo[0].exists && !atad_devinfo[0].has_packet) ||
+                 (atad_devinfo[1].exists && !atad_devinfo[1].has_packet);
+        ATA_TRACE("ATAD_PROBE result reset=%d init=%d usable=%d dev0=%u dev1=%u\n",
+                  reset_result, init_result, usable,
+                  atad_devinfo[0].exists, atad_devinfo[1].exists);
+        if (reset_result != 0 || init_result != 0 || !usable) {
             memset(atad_devinfo, 0, sizeof(atad_devinfo));
             return NULL;
         }
@@ -1471,7 +1497,11 @@ ata_devinfo_t *sceAtaInit(int device)
 #ifdef ATA_ENABLE_BDM
 int atad_probe(void)
 {
-    return sceAtaInit(0) != NULL ? 0 : -1;
+    int result;
+
+    result = sceAtaInit(0) != NULL ? 0 : -1;
+    ATA_TRACE("ATAD_PROBE complete initialized=%d ret=%d\n", ata_devinfo_init, result);
+    return result;
 }
 #endif
 

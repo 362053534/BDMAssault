@@ -67,6 +67,9 @@ void bdm_RegisterCallback(bdm_cb cb);
 void bdm_set_ata_only(int enable);
 int bdm_is_usb_fatfs_ready(void);
 int bdm_is_fatfs_ready(const char *device_name);
+/* BDMHDD诊断日志，仅写入mc0:/POPSTARTER。 */
+void bdm_trace_init(void);
+void bdm_trace_log(const char *format, ...);
 
 #define bdm_IMPORTS_start DECLARE_IMPORT_TABLE(bdm, 1, 1)
 #define bdm_IMPORTS_end   END_IMPORT_TABLE
@@ -80,5 +83,7 @@ int bdm_is_fatfs_ready(const char *device_name);
 #define I_bdm_set_ata_only     DECLARE_IMPORT(10, bdm_set_ata_only)
 #define I_bdm_is_usb_fatfs_ready DECLARE_IMPORT(11, bdm_is_usb_fatfs_ready)
 #define I_bdm_is_fatfs_ready   DECLARE_IMPORT(12, bdm_is_fatfs_ready)
+#define I_bdm_trace_init        DECLARE_IMPORT(13, bdm_trace_init)
+#define I_bdm_trace_log         DECLARE_IMPORT(14, bdm_trace_log)
 
 #endif

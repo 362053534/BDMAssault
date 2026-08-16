@@ -20,6 +20,7 @@ I_strtol
 I_strchr
 I_strrchr
 I_sprintf
+I_prnt
 sysclib_IMPORTS_end
 
 sysmem_IMPORTS_start
@@ -52,6 +53,11 @@ intrman_IMPORTS_end
 ioman_IMPORTS_start
 I_AddDrv
 I_DelDrv
+I_open
+I_close
+I_write
+I_lseek
+I_mkdir
 ioman_IMPORTS_end
 
 thsemap_IMPORTS_start

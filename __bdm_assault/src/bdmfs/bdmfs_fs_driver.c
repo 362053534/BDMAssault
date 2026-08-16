@@ -181,11 +181,15 @@ static FRESULT fatfs_fs_driver_mount_bd(int mount_info_index, struct block_devic
     mount_point[1] = ':';
     mount_point[2] = '\x00';
 
+    bdm_trace_log("FATFS_MOUNT begin unit=%d name=%s dev=%u par=%u type=0x%02x\n",
+                  mount_info_index, bd->name, bd->devNr, bd->parNr, bd->parId);
     fs_driver_mount_info[mount_info_index].mounted_bd = bd;
     ret = f_mount(&(fs_driver_mount_info[mount_info_index].fatfs), mount_point, 1);
     if (ret != FR_OK) {
         fs_driver_mount_info[mount_info_index].mounted_bd = NULL;
     }
+    bdm_trace_log("FATFS_MOUNT result unit=%d name=%s dev=%u par=%u ret=%d\n",
+                  mount_info_index, bd->name, bd->devNr, bd->parNr, ret);
     return ret;
 }
 
@@ -226,8 +230,10 @@ int connect_bd(struct block_device *bd)
     M_DEBUG("%s\n", __func__);
 
     /* ATA整盘交给MBR/GPT；避免在无分区表或挂载卡住时对整盘f_mount */
-    if (bd && bd->name && strcmp(bd->name, "ata") == 0 && bd->parNr == 0)
+    if (bd && bd->name && strcmp(bd->name, "ata") == 0 && bd->parNr == 0) {
+        bdm_trace_log("FATFS_MOUNT skip_whole name=%s dev=%u\n", bd->name, bd->devNr);
         return -1;
+    }
 
     _fs_lock();
     mount_info_index = fatfs_fs_driver_find_mount_info_index_free();
@@ -239,6 +245,8 @@ int connect_bd(struct block_device *bd)
         }
     }
     _fs_unlock();
+    if (mount_info_index == -1)
+        bdm_trace_log("FATFS_MOUNT no_free_unit name=%s dev=%u par=%u\n", bd->name, bd->devNr, bd->parNr);
     M_DEBUG("connect_bd: failed to mount device\n");
     return -1;
 }
@@ -310,6 +318,7 @@ static int fs_open(iop_file_t *fd, const char *name, int flags, int mode)
     fd->privdata = fs_find_free_fil_structure();
     if (fd->privdata == NULL) {
         _fs_unlock();
+        bdm_trace_log("FS_OPEN unit=%d path=%.255s flags=0x%x ret=%d\n", fd->unit, name, flags, -EMFILE);
         return -EMFILE;
     }
 
@@ -335,6 +344,8 @@ static int fs_open(iop_file_t *fd, const char *name, int flags, int mode)
     }
 
     _fs_unlock();
+    bdm_trace_log("FS_OPEN unit=%d path=%.255s flags=0x%x ret=%d\n",
+                  fd->unit, name, flags, ret);
     return ret;
 }
 
@@ -428,6 +439,8 @@ static int fs_read(iop_file_t *fd, void *buffer, int size)
     ret = f_read(fd->privdata, buffer, size, &br);
 
     _fs_unlock();
+    if (ret != FR_OK)
+        bdm_trace_log("FS_READ_FAIL unit=%d size=%d fatfs_ret=%d\n", fd->unit, size, ret);
     return (ret == FR_OK) ? br : 0;
 }
 
@@ -485,6 +498,7 @@ static int fs_dopen(iop_file_t *fd, const char *name)
     fd->privdata = fs_find_free_dir_structure();
     if (fd->privdata == NULL) {
         _fs_unlock();
+        bdm_trace_log("FS_DOPEN unit=%d path=%.255s ret=%d\n", fd->unit, name, -EMFILE);
         return -EMFILE;
     }
 
@@ -496,6 +510,7 @@ static int fs_dopen(iop_file_t *fd, const char *name)
     }
 
     _fs_unlock();
+    bdm_trace_log("FS_DOPEN unit=%d path=%.255s ret=%d\n", fd->unit, name, ret);
     return ret;
 }
 
@@ -568,17 +583,20 @@ static int fs_dread(iop_file_t *fd, iox_dirent_t *buffer)
 {
     M_DEBUG("%s\n", __func__);
 
+    int fatfs_ret;
     int ret;
     FILINFO fno;
 
-    if (fd->privdata == NULL)
+    if (fd->privdata == NULL) {
+        bdm_trace_log("FS_DREAD unit=%d ret=%d no_dir\n", fd->unit, -ENOENT);
         return -ENOENT;
+    }
 
     _fs_lock();
 
-    ret = f_readdir(fd->privdata, &fno);
+    fatfs_ret = f_readdir(fd->privdata, &fno);
 
-    if (ret == FR_OK && fno.fname[0]) {
+    if (fatfs_ret == FR_OK && fno.fname[0]) {
         strncpy(buffer->name, fno.fname, 255);
         fileInfoToStat(&fno, &(buffer->stat));
         ret = 1;
@@ -587,6 +605,11 @@ static int fs_dread(iop_file_t *fd, iox_dirent_t *buffer)
     }
 
     _fs_unlock();
+    if (ret > 0)
+        bdm_trace_log("FS_DREAD unit=%d name=%.255s size=%u ret=%d\n",
+                      fd->unit, buffer->name, buffer->stat.size, ret);
+    else
+        bdm_trace_log("FS_DREAD unit=%d fatfs_ret=%d ret=%d\n", fd->unit, fatfs_ret, ret);
     return ret;
 }
 
@@ -607,11 +630,13 @@ static int fs_getstat(iop_file_t *fd, const char *name, iox_stat_t *stat)
         }
         if ((strcmp(name_no_leading_slash, "") == 0) || (strcmp(name_no_leading_slash, ".") == 0)) {
             if (fatfs_fs_driver_get_mounted_bd_from_index(fd->unit) == NULL) {
+                bdm_trace_log("FS_GETSTAT unit=%d path=%.255s ret=%d\n", fd->unit, name, -ENXIO);
                 return -ENXIO;
             }
             // Return data indicating that it is a directory.
             memset(stat, 0, sizeof(*stat));
             stat->mode = FIO_S_IROTH | FIO_S_IWOTH | FIO_S_IXOTH | FIO_S_IFDIR;
+            bdm_trace_log("FS_GETSTAT unit=%d path=%.255s ret=0 mode=dir\n", fd->unit, name);
             return 0;
         }
     }
@@ -629,6 +654,7 @@ static int fs_getstat(iop_file_t *fd, const char *name, iox_stat_t *stat)
     }
 
     _fs_unlock();
+    bdm_trace_log("FS_GETSTAT unit=%d path=%.255s ret=%d\n", fd->unit, name, ret);
     return ret;
 }
 
@@ -715,8 +741,10 @@ int fs_ioctl2(iop_file_t *fd, int cmd, void *data, unsigned int datalen, void *r
     (void)data;
     (void)datalen;
 
-    if (file == NULL)
+    if (file == NULL) {
+        bdm_trace_log("FS_IOCTL2 unit=%d cmd=%d ret=%d no_file\n", fd->unit, cmd, -ENXIO);
         return -ENXIO;
+    }
 
     _fs_lock();
 
@@ -785,6 +813,8 @@ int fs_ioctl2(iop_file_t *fd, int cmd, void *data, unsigned int datalen, void *r
     }
 
     _fs_unlock();
+    bdm_trace_log("FS_IOCTL2 unit=%d cmd=%d datalen=%u rdatalen=%u ret=%d\n",
+                  fd->unit, cmd, datalen, rdatalen, ret);
     return ret;
 }
 
