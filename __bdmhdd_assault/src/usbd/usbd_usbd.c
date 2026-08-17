@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <ioman.h>
 #include <io_common.h>
+#include <sysclib.h>
 #include <thbase.h>
 #include <bdm.h>
 #include <irx_argv_trace.h>

@@ -29,6 +29,7 @@ I_memset
 I_strcmp
 I_strrchr
 I_strlen
+I_sprintf
 sysclib_IMPORTS_end
 
 bdm_IMPORTS_start
