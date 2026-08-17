@@ -6,7 +6,6 @@
 #include <thevent.h>
 #include <thsemap.h>
 #include <xsio2man.h>
-#include <irx_argv_trace.h>
 
 #include "mx4sio.h"
 #include "crc16.h"
@@ -802,11 +801,9 @@ int module_start(int argc, char *argv[])
 
     rv = sio2man_hook_init();
     if (rv < 0) {
-        irx_argv_trace_event("mx4sio", "sio2-hook=failed");
         M_PRINTF("ERROR: sio2man_hook_init returned %d\n", rv);
         goto error2;
     }
-    irx_argv_trace_event("mx4sio", "sio2-hook=ready");
 
     /* Just in case sio2man was not loaded, we initialize the dmac channels too */
     sceSetDMAPriority(IOP_DMAC_SIO2in, 3);
@@ -840,17 +837,14 @@ int module_start(int argc, char *argv[])
             sd_detect();
         DelayThread(200 * 1000);
     }
-    irx_argv_trace_event("mx4sio", "fatfs-wait=ready");
 
     /* Start thread */
     sd_detect_thread_stop = 0;
     rv = StartThread(sd_detect_thread_id, NULL);
     if (rv < 0) {
-        irx_argv_trace_event("mx4sio", "detect-thread=failed");
         M_PRINTF("ERROR: StartThread returned %d\n", rv);
         goto error4;
     }
-    irx_argv_trace_event("mx4sio", "detect-thread=ready");
 
     lib_modload = ioplib_getByName("modload");
     if (lib_modload != NULL) {
@@ -914,7 +908,6 @@ int module_stop(int argc, char *argv[])
 
 int _start(int argc, char *argv[])
 {
-    irx_argv_trace_args("mx4sio", argc, argv);
     M_PRINTF("MX4SIO v1.2\n");
 
     if (argc >= 0)

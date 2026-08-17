@@ -20,7 +20,6 @@
 #include "bdm.h"
 #include "dmacman.h"
 #include "intrman.h"
-#include "ioman.h"
 #include "loadcore.h"
 #include "stdio.h"
 #include "sysclib.h"

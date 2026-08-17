@@ -26,13 +26,6 @@ loadcore_IMPORTS_start
 I_GetLoadcoreInternalData
 loadcore_IMPORTS_end
 
-ioman_IMPORTS_start
-I_open
-I_close
-I_write
-I_lseek
-ioman_IMPORTS_end
-
 #ifndef MINI_DRIVER
 stdio_IMPORTS_start
 I_printf

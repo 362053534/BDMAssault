@@ -11,7 +11,6 @@ IOP_IMPORT_INCS += \
 	sio/sio2man \
 	system/dmacman \
 	system/intrman \
-	system/ioman \
 	system/loadcore \
 	system/sio2man \
 	system/stdio \
