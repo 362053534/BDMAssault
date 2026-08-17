@@ -23,6 +23,7 @@
 #include "sysclib.h"
 #include "thsemap.h"
 #include "loadcore.h"
+#include <irx_argv_trace.h>
 IRX_ID(MODNAME, 1, 1);
 
 #define WELCOME_STR "USBD ASSAULT Start\n"
@@ -369,6 +370,8 @@ int _start(int argc, char *argv[])
     const char *pArgs, *pParam;
     int i, option;
 
+    irx_argv_trace_args("usbhdfsd", argc, argv);
+
     for (i = 1; i < argc; i++) {
         for (option = 0; SupportedArgs[option].param != NULL; option++) {
             pParam = SupportedArgs[option].param;
@@ -393,9 +396,11 @@ int _start(int argc, char *argv[])
     dbg_printf("library entries...\n");
 
     if (RegisterLibraryEntries(&_exp_usbd) != 0) {
+        irx_argv_trace_event("usbhdfsd", "register=duplicate");
         dbg_printf("RegisterLibraryEntries failed\n");
         return MODULE_NO_RESIDENT_END;
     }
+    irx_argv_trace_event("usbhdfsd", "register=fresh");
 
     sema.attr    = 1;
     sema.option  = 0;
@@ -404,7 +409,10 @@ int _start(int argc, char *argv[])
     usbdSema     = CreateSema(&sema);
 
     hcdInit();
+    irx_argv_trace_event("usbhdfsd", "hcd-init=ready");
 
     dbg_printf("Init done\n");
-    return usbmass_bd_start(argc, argv); // make this function return, so we make sure both modules are ready to work
+    i = usbmass_bd_start(argc, argv);
+    irx_argv_trace_event("usbhdfsd", i == MODULE_NO_RESIDENT_END ? "usbmass-start=failed" : "usbmass-start=ready");
+    return i; // make this function return, so we make sure both modules are ready to work
 }

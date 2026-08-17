@@ -5,6 +5,7 @@
 #include <io_common.h>
 #include <thbase.h>
 #include <bdm.h>
+#include <irx_argv_trace.h>
 
 #define MODNAME "bdm_hdd"
 IRX_ID(MODNAME, 1, 1);
@@ -86,27 +87,35 @@ int _start(int argc, char *argv[])
     /* 不要把POPStarter传入的argv转给DEV9（未知-xxx参数会直接失败退出） */
     char *dev9_argv[1];
 
-    (void)argc;
-    (void)argv;
+    irx_argv_trace_args("bdmhdd", argc, argv);
 
     /* 在ATA接入前设置过滤器；不要在此处主动断开其他设备。 */
     bdm_set_ata_only(1);
 
     dev9_argv[0] = MODNAME;
     result = dev9_start(1, dev9_argv);
-    if (result == MODULE_NO_RESIDENT_END)
+    if (result == MODULE_NO_RESIDENT_END) {
+        irx_argv_trace_event("bdmhdd", "dev9-start=failed");
         return MODULE_NO_RESIDENT_END;
+    }
+    irx_argv_trace_event("bdmhdd", "dev9-start=ready");
 
     /* ATAD模块只启动一次；慢硬盘由atad_probe()重试底层探测。 */
     result = atad_start(0, NULL);
     if (result == MODULE_NO_RESIDENT_END) {
+        irx_argv_trace_event("bdmhdd", "atad-start=failed");
         printf("bdm_hdd: ATAD start failed.\n");
         /* DEV9已经驻留，不能让装有其代码和回调的组合模块被卸载。 */
         return MODULE_RESIDENT_END;
     }
+    irx_argv_trace_event("bdmhdd", "atad-start=ready");
 
-    if (bdm_hdd_wait_selected_pops() < 0)
+    if (bdm_hdd_wait_selected_pops() < 0) {
+        irx_argv_trace_event("bdmhdd", "pops-wait=timeout");
         printf("bdm_hdd: timed out waiting for the selected ATA POPS volume.\n");
+    } else {
+        irx_argv_trace_event("bdmhdd", "pops-wait=ready");
+    }
 
     /* DEV9和ATAD已经注册回调及导出表，超时后仍必须保持模块驻留。 */
     return MODULE_RESIDENT_END;

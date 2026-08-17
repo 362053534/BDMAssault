@@ -5,6 +5,7 @@
 #include <loadcore.h>
 #include <stdio.h>
 #include <sysclib.h>
+#include <irx_argv_trace.h>
 
 // #define DEBUG  //comment out this line when not debugging
 #include "include/module_debug.h"
@@ -131,29 +132,34 @@ int _start(int argc, char *argv[])
     int result;
     int source_selected;
 
-    (void)argc;
-    (void)argv;
+    irx_argv_trace_args("usbd", argc, argv);
 
     printf("Block Device Manager (BDM) v%d.%d\n", MAJOR_VER, MINOR_VER);
 
     /* 来源描述必须在块设备接入前生效，才能恢复OPL传入的mass编号。 */
     source_selected = bdm_load_source_selection();
+    irx_argv_trace_event("usbd", source_selected ? "source=selected" : "source=missing");
 
     if (RegisterLibraryEntries(&_exp_bdm) != 0) {
+        irx_argv_trace_event("usbd", "register=duplicate");
         M_PRINTF("ERROR: Already registered!\n");
         return MODULE_NO_RESIDENT_END;
     }
+    irx_argv_trace_event("usbd", "register=fresh");
 
     // initialize the block device manager
     if (bdm_init() < 0) {
+        irx_argv_trace_event("usbd", "bdm-init=failed");
         M_PRINTF("ERROR: BDM init failed!\n");
         return MODULE_NO_RESIDENT_END;
     }
+    irx_argv_trace_event("usbd", "bdm-init=ready");
 
     // initialize the partition driver
     part_init();
 
     result = bdmfs_fatfs_start(argc, argv);
+    irx_argv_trace_event("usbd", result == MODULE_NO_RESIDENT_END ? "fatfs-start=failed" : "fatfs-start=ready");
     /* 只有新IOP环境完整接管BDM后才消费描述，失败或重复加载不能提前删掉它。 */
     if (source_selected && result != MODULE_NO_RESIDENT_END)
         bdm_remove_source_selection();
