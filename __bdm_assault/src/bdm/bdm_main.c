@@ -127,6 +127,11 @@ static void bdm_remove_source_selection(void)
     }
 }
 
+void bdm_source_trace_event(const char *module, const char *event)
+{
+    irx_argv_trace_event(module, event);
+}
+
 int _start(int argc, char *argv[])
 {
     int result;

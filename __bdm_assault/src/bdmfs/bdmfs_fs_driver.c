@@ -38,10 +38,40 @@ static char g_source_driver[4];
 static int g_source_unit;
 static u64 g_source_lba;
 static char g_source_path[POPSTARTER_BDM_SOURCE_PATH_MAX];
+static u32 g_source_alias_trace_mask;
+
+extern void bdm_source_trace_event(const char *module, const char *event);
+
+static void fatfs_fs_driver_trace(const char *message)
+{
+    if (g_source_selection_enabled)
+        bdm_source_trace_event("source-map", message);
+}
+
+static void fatfs_fs_driver_trace_bd(const char *action, const struct block_device *bd, int result)
+{
+    char message[160];
+    u32 offset_low;
+    u32 offset_high;
+
+    if (!g_source_selection_enabled)
+        return;
+
+    offset_low = bd != NULL ? (u32)bd->sectorOffset : 0;
+    offset_high = bd != NULL ? (u32)(bd->sectorOffset >> 32) : 0;
+    sprintf(message, "%s candidate=%.8s%up%u offset=%08x%08x result=%d", action,
+            bd != NULL && bd->name != NULL ? bd->name : "null",
+            bd != NULL ? bd->devNr : 0, bd != NULL ? bd->parNr : 0,
+            offset_high, offset_low, result);
+    fatfs_fs_driver_trace(message);
+}
 
 void fatfs_fs_driver_set_source_selection(const char *driver, int unit, u64 lba, const char *path)
 {
+    char message[128];
+
     g_source_selection_enabled = 0;
+    g_source_alias_trace_mask = 0;
     memset(g_source_driver, 0, sizeof(g_source_driver));
     memset(g_source_path, 0, sizeof(g_source_path));
 
@@ -53,18 +83,36 @@ void fatfs_fs_driver_set_source_selection(const char *driver, int unit, u64 lba,
     g_source_unit = unit;
     g_source_lba = lba;
     g_source_selection_enabled = 1;
+
+    sprintf(message, "config driver=%s original=mass%d lba=%08x%08x", g_source_driver, g_source_unit,
+            (u32)(g_source_lba >> 32), (u32)g_source_lba);
+    fatfs_fs_driver_trace(message);
 }
 
 static int fatfs_fs_driver_resolve_unit(int unit)
 {
+    char message[96];
+    int resolved_unit;
+
     if (!g_source_selection_enabled)
         return unit;
 
     /* POPStarter不同版本可能固定访问mass0，也可能保留OPL传入的原编号。 */
     if (unit == 0 || unit == g_source_unit)
-        return 0;
+        resolved_unit = 0;
+    else
+        resolved_unit = -1;
 
-    return -1;
+    if (unit >= 0 && unit < 32 && (g_source_alias_trace_mask & (1U << unit)) == 0) {
+        g_source_alias_trace_mask |= 1U << unit;
+        if (resolved_unit == 0)
+            sprintf(message, "alias request=mass%d resolved=drive0 original=mass%d", unit, g_source_unit);
+        else
+            sprintf(message, "alias request=mass%d rejected original=mass%d", unit, g_source_unit);
+        fatfs_fs_driver_trace(message);
+    }
+
+    return resolved_unit;
 }
 
 // Macros for defining the modified path on stack.
@@ -212,7 +260,9 @@ int bdm_is_usb_fatfs_ready(void)
 static int source_marker_matches(int mount_info_index, struct block_device *bd)
 {
     char marker_path[POPSTARTER_BDM_SOURCE_PATH_MAX + 4];
+    char message[160];
     FIL marker;
+    FRESULT result;
     u64 marker_lba;
     int offset;
 
@@ -224,23 +274,37 @@ static int source_marker_matches(int mount_info_index, struct block_device *bd)
     strncpy(&marker_path[offset], g_source_path, sizeof(marker_path) - offset - 1);
     marker_path[sizeof(marker_path) - 1] = '\0';
 
-    if (f_open(&marker, marker_path, FA_READ) != FR_OK)
+    result = f_open(&marker, marker_path, FA_READ);
+    if (result != FR_OK) {
+        fatfs_fs_driver_trace_bd("marker-open-rejected", bd, result);
         return 0;
+    }
 
     marker_lba = clst2sect(marker.obj.fs, marker.obj.sclust) + bd->sectorOffset;
     f_close(&marker);
+
+    sprintf(message, "marker candidate=%.8s%up%u actual=%08x%08x expected=%08x%08x match=%d",
+            bd->name != NULL ? bd->name : "null", bd->devNr, bd->parNr,
+            (u32)(marker_lba >> 32), (u32)marker_lba,
+            (u32)(g_source_lba >> 32), (u32)g_source_lba, marker_lba == g_source_lba);
+    fatfs_fs_driver_trace(message);
     return marker_lba == g_source_lba;
 }
 
 static FRESULT fatfs_fs_driver_mount_bd(int mount_info_index, struct block_device *bd)
 {
+    char message[160];
     int ret;
     char mount_point[3];
 
     M_DEBUG("%s\n", __func__);
 
-    if (g_source_selection_enabled && (bd->name == NULL || strcmp(bd->name, g_source_driver) != 0))
+    if (g_source_selection_enabled && (bd->name == NULL || strcmp(bd->name, g_source_driver) != 0)) {
+        fatfs_fs_driver_trace_bd("driver-rejected", bd, FR_NO_FILESYSTEM);
         return FR_NO_FILESYSTEM;
+    }
+
+    fatfs_fs_driver_trace_bd("mount-trying", bd, mount_info_index);
 
     mount_point[0] = '0' + mount_info_index;
     mount_point[1] = ':';
@@ -254,6 +318,11 @@ static FRESULT fatfs_fs_driver_mount_bd(int mount_info_index, struct block_devic
     }
     if (ret != FR_OK) {
         fs_driver_mount_info[mount_info_index].mounted_bd = NULL;
+        fatfs_fs_driver_trace_bd("mount-rejected", bd, ret);
+    } else if (g_source_selection_enabled) {
+        sprintf(message, "selected candidate=%.8s%up%u internal=drive0 aliases=mass0,mass%d",
+                bd->name != NULL ? bd->name : "null", bd->devNr, bd->parNr, g_source_unit);
+        fatfs_fs_driver_trace(message);
     }
     return ret;
 }
@@ -295,13 +364,17 @@ int connect_bd(struct block_device *bd)
     M_DEBUG("%s\n", __func__);
 
     /* ATA整盘交给MBR/GPT；避免在无分区表或挂载卡住时对整盘f_mount */
-    if (bd && bd->name && strcmp(bd->name, "ata") == 0 && bd->parNr == 0)
+    if (bd && bd->name && strcmp(bd->name, "ata") == 0 && bd->parNr == 0) {
+        fatfs_fs_driver_trace_bd("whole-disk-rejected", bd, -1);
         return -1;
+    }
 
     _fs_lock();
     mount_info_index = g_source_selection_enabled ? 0 : fatfs_fs_driver_find_mount_info_index_free();
-    if (g_source_selection_enabled && fs_driver_mount_info[mount_info_index].mounted_bd != NULL)
+    if (g_source_selection_enabled && fs_driver_mount_info[mount_info_index].mounted_bd != NULL) {
+        fatfs_fs_driver_trace_bd("occupied-drive0-rejected", bd, -1);
         mount_info_index = -1;
+    }
     if (mount_info_index != -1) {
         M_DEBUG("connect_bd: trying to mount to index %d\n", mount_info_index);
         if (fatfs_fs_driver_mount_bd(mount_info_index, bd) == FR_OK) {
