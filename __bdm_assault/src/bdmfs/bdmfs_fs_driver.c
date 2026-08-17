@@ -31,21 +31,60 @@
 fatfs_fs_driver_mount_info fs_driver_mount_info[FF_VOLUMES];
 
 #define FATFS_FS_DRIVER_MOUNT_INFO_MAX ((int)(sizeof(fs_driver_mount_info) / sizeof(fs_driver_mount_info[0])))
+#define POPSTARTER_BDM_SOURCE_PATH_MAX 256
+
+static int g_source_selection_enabled;
+static char g_source_driver[4];
+static int g_source_unit;
+static u64 g_source_lba;
+static char g_source_path[POPSTARTER_BDM_SOURCE_PATH_MAX];
+
+void fatfs_fs_driver_set_source_selection(const char *driver, int unit, u64 lba, const char *path)
+{
+    g_source_selection_enabled = 0;
+    memset(g_source_driver, 0, sizeof(g_source_driver));
+    memset(g_source_path, 0, sizeof(g_source_path));
+
+    if (driver == NULL || path == NULL || driver[0] == '\0' || path[0] == '\0' || unit < 0 || unit >= FATFS_FS_DRIVER_MOUNT_INFO_MAX)
+        return;
+
+    strncpy(g_source_driver, driver, sizeof(g_source_driver) - 1);
+    strncpy(g_source_path, path, sizeof(g_source_path) - 1);
+    g_source_unit = unit;
+    g_source_lba = lba;
+    g_source_selection_enabled = 1;
+}
+
+static int fatfs_fs_driver_resolve_unit(int unit)
+{
+    if (!g_source_selection_enabled)
+        return unit;
+
+    /* POPStarter不同版本可能固定访问mass0，也可能保留OPL传入的原编号。 */
+    if (unit == 0 || unit == g_source_unit)
+        return 0;
+
+    return -1;
+}
 
 // Macros for defining the modified path on stack.
 #define FATFS_FS_DRIVER_NAME_ALLOC_ON_STACK_DEFINITIONS(varname) \
-    const char *modified_##varname;
+    const char *modified_##varname; \
+    int resolved_unit_##varname;
 
 #define FATFS_FS_DRIVER_NAME_ALLOC_ON_STACK_IMPLEMENTATION(varname, fd) \
     { \
-        if ((fd)->unit != 0) \
+        resolved_unit_##varname = fatfs_fs_driver_resolve_unit((fd)->unit); \
+        if (resolved_unit_##varname < 0) \
+            return -ENXIO; \
+        if (resolved_unit_##varname != 0) \
         { \
             int strlen_##varname; \
             char *modified_scope_##varname; \
             \
             strlen_##varname = strlen(varname); \
             modified_scope_##varname = __builtin_alloca(3 + strlen_##varname + 1); \
-            modified_scope_##varname[0] = '0' + (fd)->unit; \
+            modified_scope_##varname[0] = '0' + resolved_unit_##varname; \
             modified_scope_##varname[1] = ':'; \
             modified_scope_##varname[2] = '/'; \
             memcpy((modified_scope_##varname) + 3, varname, strlen_##varname); \
@@ -170,6 +209,29 @@ int bdm_is_usb_fatfs_ready(void)
     return bdm_is_fatfs_ready("usb");
 }
 
+static int source_marker_matches(int mount_info_index, struct block_device *bd)
+{
+    char marker_path[POPSTARTER_BDM_SOURCE_PATH_MAX + 4];
+    FIL marker;
+    u64 marker_lba;
+    int offset;
+
+    marker_path[0] = '0' + mount_info_index;
+    marker_path[1] = ':';
+    offset = 2;
+    if (g_source_path[0] != '/' && g_source_path[0] != '\\')
+        marker_path[offset++] = '/';
+    strncpy(&marker_path[offset], g_source_path, sizeof(marker_path) - offset - 1);
+    marker_path[sizeof(marker_path) - 1] = '\0';
+
+    if (f_open(&marker, marker_path, FA_READ) != FR_OK)
+        return 0;
+
+    marker_lba = clst2sect(marker.obj.fs, marker.obj.sclust) + bd->sectorOffset;
+    f_close(&marker);
+    return marker_lba == g_source_lba;
+}
+
 static FRESULT fatfs_fs_driver_mount_bd(int mount_info_index, struct block_device *bd)
 {
     int ret;
@@ -177,12 +239,19 @@ static FRESULT fatfs_fs_driver_mount_bd(int mount_info_index, struct block_devic
 
     M_DEBUG("%s\n", __func__);
 
+    if (g_source_selection_enabled && (bd->name == NULL || strcmp(bd->name, g_source_driver) != 0))
+        return FR_NO_FILESYSTEM;
+
     mount_point[0] = '0' + mount_info_index;
     mount_point[1] = ':';
     mount_point[2] = '\x00';
 
     fs_driver_mount_info[mount_info_index].mounted_bd = bd;
     ret = f_mount(&(fs_driver_mount_info[mount_info_index].fatfs), mount_point, 1);
+    if (ret == FR_OK && g_source_selection_enabled && !source_marker_matches(mount_info_index, bd)) {
+        f_unmount(mount_point);
+        ret = FR_NO_FILE;
+    }
     if (ret != FR_OK) {
         fs_driver_mount_info[mount_info_index].mounted_bd = NULL;
     }
@@ -230,7 +299,9 @@ int connect_bd(struct block_device *bd)
         return -1;
 
     _fs_lock();
-    mount_info_index = fatfs_fs_driver_find_mount_info_index_free();
+    mount_info_index = g_source_selection_enabled ? 0 : fatfs_fs_driver_find_mount_info_index_free();
+    if (g_source_selection_enabled && fs_driver_mount_info[mount_info_index].mounted_bd != NULL)
+        mount_info_index = -1;
     if (mount_info_index != -1) {
         M_DEBUG("connect_bd: trying to mount to index %d\n", mount_info_index);
         if (fatfs_fs_driver_mount_bd(mount_info_index, bd) == FR_OK) {
@@ -596,8 +667,13 @@ static int fs_getstat(iop_file_t *fd, const char *name, iox_stat_t *stat)
     M_DEBUG("%s: unit %d name %s\n", __func__, fd->unit, name);
 
     int ret;
+    int resolved_unit;
     FILINFO fno;
     FATFS_FS_DRIVER_NAME_ALLOC_ON_STACK_DEFINITIONS(name);
+
+    resolved_unit = fatfs_fs_driver_resolve_unit(fd->unit);
+    if (resolved_unit < 0)
+        return -ENXIO;
 
     // FatFs f_stat doesn't handle the root directory, so we'll handle this case ourselves.
     {
@@ -606,7 +682,7 @@ static int fs_getstat(iop_file_t *fd, const char *name, iox_stat_t *stat)
             name_no_leading_slash += 1;
         }
         if ((strcmp(name_no_leading_slash, "") == 0) || (strcmp(name_no_leading_slash, ".") == 0)) {
-            if (fatfs_fs_driver_get_mounted_bd_from_index(fd->unit) == NULL) {
+            if (fatfs_fs_driver_get_mounted_bd_from_index(resolved_unit) == NULL) {
                 return -ENXIO;
             }
             // Return data indicating that it is a directory.
@@ -745,8 +821,12 @@ int fs_ioctl2(iop_file_t *fd, int cmd, void *data, unsigned int datalen, void *r
             ret = 0;
             break;
         case USBMASS_IOCTL_GET_DRIVERNAME: {
-            struct block_device *mounted_bd = fatfs_fs_driver_get_mounted_bd_from_index(fd->unit);
-            ret = (mounted_bd == NULL) ? -ENXIO : *(int *)(mounted_bd->name);
+            struct block_device *mounted_bd = fatfs_fs_driver_get_mounted_bd_from_index(file->obj.fs->pdrv);
+            if (mounted_bd == NULL) {
+                ret = -ENXIO;
+                break;
+            }
+            ret = *(int *)(mounted_bd->name);
 
             // Check for a return buffer and copy the whole name.
             if (rdata != NULL)
@@ -821,12 +901,17 @@ int fs_rename(iop_file_t *fd, const char *path, const char *newpath)
 static int fs_devctl(iop_file_t *fd, const char *name, int cmd, void *arg, unsigned int arglen, void *buf, unsigned int buflen)
 {
     int ret;
+    int resolved_unit;
 
     (void)name;
     (void)arg;
     (void)arglen;
     (void)buf;
     (void)buflen;
+
+    resolved_unit = fatfs_fs_driver_resolve_unit(fd->unit);
+    if (resolved_unit < 0)
+        return -ENXIO;
 
     _fs_lock();
 
@@ -838,7 +923,7 @@ static int fs_devctl(iop_file_t *fd, const char *name, int cmd, void *arg, unsig
             break;
         }
         case USBMASS_DEVCTL_STOP_ALL: {
-            fatfs_fs_driver_stop_single_bd(fd->unit);
+            fatfs_fs_driver_stop_single_bd(resolved_unit);
             ret        = FR_OK;
             break;
         }
