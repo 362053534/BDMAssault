@@ -67,9 +67,13 @@ static int irx_argv_trace_open(const char *path)
 {
     int fd;
 
-    fd = open(path, FIO_O_WRONLY | FIO_O_CREAT);
-    if (fd < 0)
-        return fd;
+    fd = open(path, FIO_O_WRONLY);
+    if (fd < 0) {
+        /* mcman会把已存在文件上的FIO_O_CREAT当作重新创建，因此只在首次缺失时使用。 */
+        fd = open(path, FIO_O_WRONLY | FIO_O_CREAT);
+        if (fd < 0)
+            return fd;
+    }
 
     /* rom0:ioman下的记忆卡设备不会可靠执行FIO_O_APPEND，必须显式定位到末尾。 */
     if (lseek(fd, 0, FIO_SEEK_END) < 0) {
