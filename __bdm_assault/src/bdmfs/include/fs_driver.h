@@ -17,5 +17,6 @@ extern int InitFS(void);
 extern int connect_bd(struct block_device *bd);
 extern void disconnect_bd(struct block_device *bd);
 extern struct block_device *fatfs_fs_driver_get_mounted_bd_from_index(int mount_info_index);
+extern void fatfs_fs_driver_set_source_selection(const char *driver, int unit, u64 lba, const char *path);
 
 #endif
