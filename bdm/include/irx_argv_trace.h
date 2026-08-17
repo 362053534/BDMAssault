@@ -63,11 +63,28 @@ static void irx_argv_trace_write_number(int fd, int value)
     }
 }
 
+static int irx_argv_trace_open(const char *path)
+{
+    int fd;
+
+    fd = open(path, FIO_O_WRONLY | FIO_O_CREAT);
+    if (fd < 0)
+        return fd;
+
+    /* rom0:ioman下的记忆卡设备不会可靠执行FIO_O_APPEND，必须显式定位到末尾。 */
+    if (lseek(fd, 0, FIO_SEEK_END) < 0) {
+        close(fd);
+        return -1;
+    }
+
+    return fd;
+}
+
 static void irx_argv_trace_event_to_slot(const char *path, const char *module, const char *event)
 {
     int fd;
 
-    fd = open(path, FIO_O_WRONLY | FIO_O_CREAT | FIO_O_APPEND);
+    fd = irx_argv_trace_open(path);
     if (fd < 0)
         return;
 
@@ -91,7 +108,7 @@ static void irx_argv_trace_args_to_slot(const char *path, const char *module, in
     int fd;
     int i;
 
-    fd = open(path, FIO_O_WRONLY | FIO_O_CREAT | FIO_O_APPEND);
+    fd = irx_argv_trace_open(path);
     if (fd < 0)
         return;
 
