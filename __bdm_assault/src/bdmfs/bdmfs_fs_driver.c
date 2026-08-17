@@ -32,6 +32,7 @@ fatfs_fs_driver_mount_info fs_driver_mount_info[FF_VOLUMES];
 
 #define FATFS_FS_DRIVER_MOUNT_INFO_MAX ((int)(sizeof(fs_driver_mount_info) / sizeof(fs_driver_mount_info[0])))
 #define POPSTARTER_BDM_SOURCE_PATH_MAX 256
+#define POPSTARTER_SOURCE_IO_TRACE_MAX  32
 
 static int g_source_selection_enabled;
 static char g_source_driver[4];
@@ -39,6 +40,7 @@ static int g_source_unit;
 static u64 g_source_lba;
 static char g_source_path[POPSTARTER_BDM_SOURCE_PATH_MAX];
 static u32 g_source_alias_trace_mask;
+static u32 g_source_io_trace_count;
 
 extern void bdm_source_trace_event(const char *module, const char *event);
 
@@ -66,12 +68,30 @@ static void fatfs_fs_driver_trace_bd(const char *action, const struct block_devi
     fatfs_fs_driver_trace(message);
 }
 
+static void fatfs_fs_driver_trace_request(const char *operation, int unit, const char *path, int resolved_unit)
+{
+    char message[192];
+
+    if (!g_source_selection_enabled || g_source_io_trace_count >= POPSTARTER_SOURCE_IO_TRACE_MAX)
+        return;
+
+    g_source_io_trace_count++;
+    if (resolved_unit >= 0)
+        sprintf(message, "io seq=%u op=%.8s request=mass%d resolved=drive%d path=%.96s",
+                g_source_io_trace_count, operation, unit, resolved_unit, path != NULL ? path : "null");
+    else
+        sprintf(message, "io seq=%u op=%.8s request=mass%d rejected path=%.96s",
+                g_source_io_trace_count, operation, unit, path != NULL ? path : "null");
+    fatfs_fs_driver_trace(message);
+}
+
 void fatfs_fs_driver_set_source_selection(const char *driver, int unit, u64 lba, const char *path)
 {
     char message[128];
 
     g_source_selection_enabled = 0;
     g_source_alias_trace_mask = 0;
+    g_source_io_trace_count = 0;
     memset(g_source_driver, 0, sizeof(g_source_driver));
     memset(g_source_path, 0, sizeof(g_source_path));
 
@@ -441,11 +461,14 @@ static int fs_open(iop_file_t *fd, const char *name, int flags, int mode)
     M_DEBUG("%s: %s flags=%X mode=%X\n", __func__, name, flags, mode);
 
     int ret;
+    int trace_resolved_unit;
     BYTE f_mode = FA_OPEN_EXISTING;
     FATFS_FS_DRIVER_NAME_ALLOC_ON_STACK_DEFINITIONS(name);
 
     (void)mode;
 
+    trace_resolved_unit = fatfs_fs_driver_resolve_unit(fd->unit);
+    fatfs_fs_driver_trace_request("open", fd->unit, name, trace_resolved_unit);
     FATFS_FS_DRIVER_NAME_ALLOC_ON_STACK_IMPLEMENTATION(name, fd);
 
     _fs_lock();
@@ -619,8 +642,11 @@ static int fs_dopen(iop_file_t *fd, const char *name)
     M_DEBUG("%s: unit %d name %s\n", __func__, fd->unit, name);
 
     int ret;
+    int trace_resolved_unit;
     FATFS_FS_DRIVER_NAME_ALLOC_ON_STACK_DEFINITIONS(name);
 
+    trace_resolved_unit = fatfs_fs_driver_resolve_unit(fd->unit);
+    fatfs_fs_driver_trace_request("dopen", fd->unit, name, trace_resolved_unit);
     FATFS_FS_DRIVER_NAME_ALLOC_ON_STACK_IMPLEMENTATION(name, fd);
 
     _fs_lock();
@@ -745,6 +771,7 @@ static int fs_getstat(iop_file_t *fd, const char *name, iox_stat_t *stat)
     FATFS_FS_DRIVER_NAME_ALLOC_ON_STACK_DEFINITIONS(name);
 
     resolved_unit = fatfs_fs_driver_resolve_unit(fd->unit);
+    fatfs_fs_driver_trace_request("getstat", fd->unit, name, resolved_unit);
     if (resolved_unit < 0)
         return -ENXIO;
 
