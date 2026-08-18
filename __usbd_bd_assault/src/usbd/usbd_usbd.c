@@ -41,7 +41,7 @@ UsbdConfig usbConfig = {
     8,     // maxHubDevices
     8,     // maxPortsPerHub
 
-    0x1E, // hcdThreadPrio
+    0x23, // hcdThreadPrio
     0x24  // cbThreadPrio
 };
 #else
@@ -55,7 +55,7 @@ UsbdConfig usbConfig = {
     4,     // maxHubDevices
     4,     // maxPortsPerHub
 
-    0x1E, // hcdThreadPrio
+    0x23, // hcdThreadPrio
     0x24  // cbThreadPrio
 };
 #endif
