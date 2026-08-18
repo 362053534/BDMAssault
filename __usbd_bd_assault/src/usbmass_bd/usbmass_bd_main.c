@@ -14,7 +14,6 @@
 //IRX_ID(MODNAME, MAJOR_VER, MINOR_VER);
 
 extern int usb_mass_init(void);
-extern volatile int g_usb_scsi_runtime_ready;
 
 int usbmass_bd_start(int argc, char *argv[])
 {
@@ -38,9 +37,6 @@ int usbmass_bd_start(int argc, char *argv[])
     /* 只等待内存中的FatFs挂载状态，避免探测目录时提前读盘。 */
     while (!bdm_is_usb_fatfs_ready())
         DelayThread(50000);
-
-    /* 从此处开始只辨识运行期重试是否造成卡顿。 */
-    g_usb_scsi_runtime_ready = 1;
 
     // return resident
     return MODULE_RESIDENT_END;
