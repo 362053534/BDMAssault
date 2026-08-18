@@ -62,27 +62,32 @@ static int pops_boot_mailbox_is_valid(const pops_boot_mailbox_t *mailbox)
 {
     unsigned int i;
 
-    if (mailbox->magic != POPS_BOOT_MAILBOX_MAGIC ||
-        mailbox->version != POPS_BOOT_MAILBOX_VERSION ||
-        mailbox->size != sizeof(*mailbox) ||
-        mailbox->deviceType > 3 ||
-        mailbox->checksum != pops_boot_mailbox_checksum(mailbox))
-        return 0;
+    if (mailbox->magic != POPS_BOOT_MAILBOX_MAGIC)
+        return -2;
+    if (mailbox->version != POPS_BOOT_MAILBOX_VERSION)
+        return -3;
+    if (mailbox->size != sizeof(*mailbox))
+        return -4;
+    if (mailbox->deviceType > 3)
+        return -5;
+    if (mailbox->checksum != pops_boot_mailbox_checksum(mailbox))
+        return -6;
 
     if (mailbox->vcdPath[0] != '0' || mailbox->vcdPath[1] != ':' || mailbox->vcdPath[2] != '/')
-        return 0;
+        return -7;
 
     for (i = 3; i < sizeof(mailbox->vcdPath); i++) {
         if (mailbox->vcdPath[i] == '\0')
-            return i > 3;
+            return i > 3 ? 0 : -8;
     }
 
-    return 0;
+    return -8;
 }
 
 static int pops_boot_mailbox_read(void)
 {
     SifRpcReceiveData_t receiveData;
+    int validationResult;
 
     memset(&g_pops_boot_mailbox, 0, sizeof(g_pops_boot_mailbox));
     g_pops_boot_mailbox_valid = 0;
@@ -92,8 +97,9 @@ static int pops_boot_mailbox_read(void)
                            &g_pops_boot_mailbox, sizeof(g_pops_boot_mailbox), 0) < 0)
         return -1;
 
-    if (!pops_boot_mailbox_is_valid(&g_pops_boot_mailbox))
-        return -2;
+    validationResult = pops_boot_mailbox_is_valid(&g_pops_boot_mailbox);
+    if (validationResult < 0)
+        return validationResult;
 
     g_pops_boot_mailbox_valid = 1;
     return 0;
@@ -162,6 +168,20 @@ static void vcd_argv_trace_write_number(int fd, int value)
         length--;
         vcd_argv_trace_write(fd, &digits[length], 1);
     }
+}
+
+static void vcd_argv_trace_write_hex(int fd, u32 value)
+{
+    static const char digits[] = "0123456789ABCDEF";
+    char text[10];
+    int i;
+
+    text[0] = '0';
+    text[1] = 'x';
+    for (i = 0; i < 8; i++)
+        text[i + 2] = digits[(value >> ((7 - i) * 4)) & 0x0F];
+
+    vcd_argv_trace_write(fd, text, sizeof(text));
 }
 
 static int vcd_argv_trace_open(const char *path, int truncate)
@@ -255,6 +275,7 @@ void bdm_trace_popstarter_vcd_args(const char *module, int argc, char *argv[])
 static void vcd_argv_trace_mailbox_to_slot(const char *path, int result)
 {
     int fd;
+    int targetLength;
 
     fd = vcd_argv_trace_open(path, 0);
     if (fd < 0)
@@ -270,7 +291,51 @@ static void vcd_argv_trace_mailbox_to_slot(const char *path, int result)
     } else if (result == -1) {
         vcd_argv_trace_write_text(fd, "transfer-failed\n");
     } else {
-        vcd_argv_trace_write_text(fd, "invalid\n");
+        vcd_argv_trace_write_text(fd, "invalid reason=");
+        switch (result) {
+            case -2:
+                vcd_argv_trace_write_text(fd, "magic");
+                break;
+            case -3:
+                vcd_argv_trace_write_text(fd, "version");
+                break;
+            case -4:
+                vcd_argv_trace_write_text(fd, "size");
+                break;
+            case -5:
+                vcd_argv_trace_write_text(fd, "device");
+                break;
+            case -6:
+                vcd_argv_trace_write_text(fd, "checksum");
+                break;
+            case -7:
+                vcd_argv_trace_write_text(fd, "path-prefix");
+                break;
+            case -8:
+                vcd_argv_trace_write_text(fd, "path-termination");
+                break;
+            default:
+                vcd_argv_trace_write_text(fd, "unknown");
+                break;
+        }
+        vcd_argv_trace_write_text(fd, " magic=");
+        vcd_argv_trace_write_hex(fd, g_pops_boot_mailbox.magic);
+        vcd_argv_trace_write_text(fd, " version=");
+        vcd_argv_trace_write_number(fd, g_pops_boot_mailbox.version);
+        vcd_argv_trace_write_text(fd, " size=");
+        vcd_argv_trace_write_number(fd, g_pops_boot_mailbox.size);
+        vcd_argv_trace_write_text(fd, " type=");
+        vcd_argv_trace_write_hex(fd, g_pops_boot_mailbox.deviceType);
+        vcd_argv_trace_write_text(fd, " checksum=");
+        vcd_argv_trace_write_hex(fd, g_pops_boot_mailbox.checksum);
+        vcd_argv_trace_write_text(fd, " expected=");
+        vcd_argv_trace_write_hex(fd, pops_boot_mailbox_checksum(&g_pops_boot_mailbox));
+        vcd_argv_trace_write_text(fd, " target=");
+        targetLength = vcd_argv_trace_strlen(g_pops_boot_mailbox.vcdPath, POPS_BOOT_MAILBOX_PATH_MAX - 1);
+        vcd_argv_trace_write(fd, g_pops_boot_mailbox.vcdPath, targetLength);
+        if (targetLength == POPS_BOOT_MAILBOX_PATH_MAX - 1)
+            vcd_argv_trace_write_text(fd, "<truncated>");
+        vcd_argv_trace_write(fd, "\n", 1);
     }
 
     close(fd);
