@@ -79,8 +79,9 @@ void bdm_connect_bd(struct block_device *bd)
     for (i = 0; i < MAX_CONNECTIONS; ++i) {
         if (g_mount[i].bd == NULL) {
             g_mount[i].bd = bd;
-            // Create cache for entire device only (not for the partitions on it)
-            g_mount[i].cbd = (bd->parNr == 0) ? bd_cache_create(bd) : NULL;
+            /* bdm_get_bd()对外返回原始设备，POPS的持续USB扇区读取不会使用此缓存。
+               不为USB分配约128KiB常驻缓存，避免挤压POPS的IOP流缓冲。 */
+            g_mount[i].cbd = (bd->parNr == 0 && strcmp(bd->name, "usb") != 0) ? bd_cache_create(bd) : NULL;
             // New block device, try to mount it to a filesystem
             SetEventFlag(bdm_event, BDM_EVENT_MOUNT);
             break;
