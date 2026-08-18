@@ -4,7 +4,6 @@
 #include <sifcmd.h>
 #include <stdio.h>
 #include <string.h>
-#include <thbase.h>
 
 // #define DEBUG  //comment out this line when not debugging
 #include "include/module_debug.h"
@@ -19,7 +18,6 @@
 #define POPS_BOOT_VCD_PREFIX       "0:/POPS/"
 #define POPS_BOOT_VCD_SUFFIX       ".VCD"
 #define POPS_BOOT_DEVICE_NON_BDM   (-1)
-#define POPS_BOOT_WAIT_DELAY_US    200000
 
 typedef struct
 {
@@ -106,12 +104,6 @@ static int pops_boot_mailbox_read(void)
     return pops_boot_mailbox_is_valid(&g_pops_boot_mailbox) ? 0 : -1;
 }
 
-static void pops_boot_wait_forever(void)
-{
-    while (1)
-        DelayThread(POPS_BOOT_WAIT_DELAY_US);
-}
-
 int _start(int argc, char *argv[])
 {
     const char *vcdPath;
@@ -131,12 +123,11 @@ int _start(int argc, char *argv[])
             vcdPath = g_pops_boot_mailbox.vcdPath;
     }
 
-    /* 验证版不允许BDM来源回退到PAK，未收到VCD路径时永久等待。 */
-    if (bdmEnabled && !vcdPath)
-        pops_boot_wait_forever();
-
-    if (bdm_configure_popstarter_source(bdmEnabled, vcdPath) < 0)
-        pops_boot_wait_forever();
+    /* 邮箱损坏或BDM路径异常时开放式回退，继续按PAK探测启动。 */
+    if (bdm_configure_popstarter_source(bdmEnabled, vcdPath) < 0) {
+        bdmEnabled = 1;
+        bdm_configure_popstarter_source(1, NULL);
+    }
 
     if (RegisterLibraryEntries(&_exp_bdm) != 0) {
         M_PRINTF("ERROR: Already registered!\n");

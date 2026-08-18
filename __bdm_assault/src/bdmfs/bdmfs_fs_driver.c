@@ -32,6 +32,7 @@ fatfs_fs_driver_mount_info fs_driver_mount_info[FF_VOLUMES];
 
 #define FATFS_FS_DRIVER_MOUNT_INFO_MAX ((int)(sizeof(fs_driver_mount_info) / sizeof(fs_driver_mount_info[0])))
 #define POPSTARTER_DIR_PATH "0:/POPS"
+#define POPSTARTER_PAK_PATH "0:/POPS/POPS_IOX.PAK"
 #define POPSTARTER_ARG_PREFIX_XX "XX."
 #define POPSTARTER_ARG_PREFIX_SB "SB."
 #define POPSTARTER_ARG_SUFFIX ".ELF"
@@ -190,7 +191,7 @@ int bdm_set_popstarter_vcd(int argc, char *argv[])
         return BDM_POPSTARTER_DRIVER_INERT;
 
     _fs_lock();
-    /* EE邮箱已明确配置启动来源时，不再解析不可靠的IRX argv。 */
+    /* EE邮箱已明确选择VCD或PAK回退时，不再解析不可靠的IRX argv。 */
     if (g_popstarter_probe_configured) {
         _fs_unlock();
         return BDM_POPSTARTER_DRIVER_READY;
@@ -277,7 +278,7 @@ static FRESULT fatfs_fs_driver_check_popstarter_file(int *ready)
     FRESULT result;
 
     *ready = 0;
-    path = g_popstarter_vcd_path;
+    path = g_popstarter_vcd_path[0] != '\0' ? g_popstarter_vcd_path : POPSTARTER_PAK_PATH;
 
     result = f_stat(path, &info);
     if (result == FR_OK && (info.fattrib & AM_DIR) == 0)
@@ -288,16 +289,23 @@ static FRESULT fatfs_fs_driver_check_popstarter_file(int *ready)
 
 static enum popstarter_mount_state fatfs_fs_driver_wait_popstarter_file(void)
 {
+    FRESULT result;
     int ready;
 
     while (1) {
-        fatfs_fs_driver_check_popstarter_file(&ready);
+        result = fatfs_fs_driver_check_popstarter_file(&ready);
         if (ready)
             return POPSTARTER_VCD_READY;
 
-        /* 验证EE传入路径时，任何一次探测失败都不能切换目标或停止重试。 */
+        /* 大容量设备可能需要较长时间才能读取目录项，因此对可恢复状态无限等待。 */
+        if (result != FR_DISK_ERR && result != FR_NOT_READY &&
+            result != FR_NO_FILE && result != FR_NO_PATH)
+            break;
+
         DelayThread(POPSTARTER_VCD_CHECK_DELAY_US);
     }
+
+    return POPSTARTER_VCD_FAILED;
 }
 
 int bdm_is_fatfs_ready(const char *device_name)
