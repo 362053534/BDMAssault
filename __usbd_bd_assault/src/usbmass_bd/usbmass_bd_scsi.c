@@ -12,7 +12,11 @@
 /* 必须用 u32 移位，避免 last_lba>=0x80000000 时有符号左移导致容量错误 */
 #define getBI32(__buf) ((((u32)(((u8 *)(__buf))[0])) << 24) | (((u32)(((u8 *)(__buf))[1])) << 16) | (((u32)(((u8 *)(__buf))[2])) << 8) | ((u32)(((u8 *)(__buf))[3])))
 #define getBI64(__buf) (((u64)getBI32(__buf) << 32) | (u64)getBI32(((u8 *)(__buf)) + 4))
-#define SCSI_MAX_RETRIES 16
+#define SCSI_STARTUP_MAX_RETRIES 16
+#define SCSI_RUNTIME_MAX_RETRIES 1
+
+/* 挂载完成后由模块入口置位，仅限制游戏运行期的重试。 */
+volatile int g_usb_scsi_runtime_ready = 0;
 
 typedef struct _inquiry_data
 {
@@ -234,6 +238,7 @@ static int scsi_read(struct block_device *bd, u64 sector, void *buffer, u16 coun
 {
     struct scsi_interface *scsi = (struct scsi_interface *)bd->priv;
     u16 sc_remaining            = count;
+    int max_retries             = g_usb_scsi_runtime_ready ? SCSI_RUNTIME_MAX_RETRIES : SCSI_STARTUP_MAX_RETRIES;
     int retries;
 
     M_DEBUG("%s: sector=0x%08x%08x, count=%d\n", __func__, U64_2XU32(&sector), count);
@@ -241,13 +246,13 @@ static int scsi_read(struct block_device *bd, u64 sector, void *buffer, u16 coun
     while (sc_remaining > 0) {
         u16 sc = sc_remaining > scsi->max_sectors ? scsi->max_sectors : sc_remaining;
 
-        for (retries = SCSI_MAX_RETRIES; retries > 0; retries--) {
+        for (retries = max_retries; retries > 0; retries--) {
             if (scsi_cmd_rw_sector(bd, sector, buffer, sc, 0) == 0)
                 break;
         }
 
         if (retries == 0) {
-            M_PRINTF("ERROR: unable to read sector after %d tries (sector=0x%08x%08x, count=%d)\n", SCSI_MAX_RETRIES, U64_2XU32(&sector), count);
+            M_PRINTF("ERROR: unable to read sector after %d tries (sector=0x%08x%08x, count=%d)\n", max_retries, U64_2XU32(&sector), count);
             return -EIO;
         }
 
@@ -263,6 +268,7 @@ static int scsi_write(struct block_device *bd, u64 sector, const void *buffer, u
 {
     struct scsi_interface *scsi = (struct scsi_interface *)bd->priv;
     u16 sc_remaining            = count;
+    int max_retries             = g_usb_scsi_runtime_ready ? SCSI_RUNTIME_MAX_RETRIES : SCSI_STARTUP_MAX_RETRIES;
     int retries;
 
     M_DEBUG("%s: sector=0x%08x%08x, count=%d\n", __func__, U64_2XU32(&sector), count);
@@ -270,13 +276,13 @@ static int scsi_write(struct block_device *bd, u64 sector, const void *buffer, u
     while (sc_remaining > 0) {
         u16 sc = sc_remaining > scsi->max_sectors ? scsi->max_sectors : sc_remaining;
 
-        for (retries = SCSI_MAX_RETRIES; retries > 0; retries--) {
+        for (retries = max_retries; retries > 0; retries--) {
             if (scsi_cmd_rw_sector(bd, sector, buffer, sc, 1) == 0)
                 break;
         }
 
         if (retries == 0) {
-            M_PRINTF("ERROR: unable to write sector after %d tries (sector=0x%08x%08x, count=%d)\n", SCSI_MAX_RETRIES, U64_2XU32(&sector), count);
+            M_PRINTF("ERROR: unable to write sector after %d tries (sector=0x%08x%08x, count=%d)\n", max_retries, U64_2XU32(&sector), count);
             return -EIO;
         }
 
