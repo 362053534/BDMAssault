@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <thbase.h>
 #include <bdm.h>
+#include <atahw.h>
 
 #define MODNAME "bdm_hdd"
 IRX_ID(MODNAME, 1, 1);
@@ -10,28 +11,40 @@ IRX_ID(MODNAME, 1, 1);
 /* FatFs挂载由BDM线程异步完成；PAK就绪前不能把控制权交给POPS。 */
 #define BDM_HDD_POPS_WAIT_STEP_US  (200000)
 #define BDM_HDD_PROBE_RETRY_US     (500000)
+#define BDM_HDD_READY_SAMPLES      2
 
 extern int dev9_start(int argc, char *argv[]);
 extern int atad_start(int argc, char *argv[]);
 extern int atad_probe(void);
+extern int atad_get_probe_status(void);
 
 /* 只观察挂载状态；慢硬盘只重试探测，不重启模块或改动BDM拓扑。 */
 static void bdm_hdd_wait_pops_on_mass0(void)
 {
     unsigned int probe_waited;
     int ata_detected;
+    int ready_samples;
+    int status;
 
-    /* atad_start()已执行首次探测；这里再次确认状态，之后只在失败时重试。 */
-    ata_detected = atad_probe() == 0;
-    probe_waited = 0;
+    /* atad_start()已执行首次探测；后续完整探测必须先通过被动状态检查。 */
+    ata_detected = 0;
+    ready_samples = 0;
+    probe_waited = BDM_HDD_PROBE_RETRY_US;
     while (!bdm_is_fatfs_ready("ata")) {
         if (!ata_detected) {
-            if (probe_waited >= BDM_HDD_PROBE_RETRY_US) {
+            status = atad_get_probe_status();
+            if (status >= 0 && (status & ATA_STAT_BUSY) == 0 && (status & ATA_STAT_READY) != 0)
+                ready_samples++;
+            else
+                ready_samples = 0;
+
+            if (ready_samples >= BDM_HDD_READY_SAMPLES && probe_waited >= BDM_HDD_PROBE_RETRY_US) {
                 ata_detected = atad_probe() == 0;
+                ready_samples = 0;
                 probe_waited = 0;
             }
 
-            if (!ata_detected)
+            if (!ata_detected && probe_waited < BDM_HDD_PROBE_RETRY_US)
                 probe_waited += BDM_HDD_POPS_WAIT_STEP_US;
         }
 

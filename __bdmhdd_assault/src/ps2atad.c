@@ -71,6 +71,7 @@ static int ata_evflg        = -1;
 
 #ifdef ATA_ENABLE_BDM
 int atad_probe(void);
+int atad_get_probe_status(void);
 #endif
 
 // Workarounds
@@ -1481,6 +1482,21 @@ ata_devinfo_t *sceAtaInit(int device)
 }
 
 #ifdef ATA_ENABLE_BDM
+int atad_get_probe_status(void)
+{
+#ifdef ATA_USE_DEV9
+    USE_ATA_REGS;
+#endif
+#ifdef ATA_USE_AIFDEV9
+    USE_AIF_ATA_REGS;
+#endif
+    int status;
+
+    /* 读取备用状态不会清除ATA中断；浮空总线常见的0x00和0xFF不能视为设备就绪。 */
+    status = ata_hwport->r_control & 0xff;
+    return status == 0x00 || status == 0xff ? -1 : status;
+}
+
 int atad_probe(void)
 {
     return sceAtaInit(0) != NULL ? 0 : -1;
