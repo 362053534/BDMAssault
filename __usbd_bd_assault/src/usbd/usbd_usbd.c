@@ -19,6 +19,7 @@
 #include "hub.h"
 #include "usbio.h"
 
+#include <bdm.h>
 #include "stdio.h"
 #include "sysclib.h"
 #include "thsemap.h"
@@ -368,6 +369,13 @@ int _start(int argc, char *argv[])
     iop_sema_t sema;
     const char *pArgs, *pParam;
     int i, option;
+    int sourceResult;
+
+    sourceResult = bdm_set_popstarter_vcd(argc, argv);
+    if (sourceResult == BDM_POPSTARTER_DRIVER_INERT)
+        return MODULE_RESIDENT_END;
+    if (sourceResult < 0)
+        return MODULE_NO_RESIDENT_END;
 
     for (i = 1; i < argc; i++) {
         for (option = 0; SupportedArgs[option].param != NULL; option++) {
