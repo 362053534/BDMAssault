@@ -327,9 +327,14 @@ void disconnect_bd(struct block_device *bd)
 #define MAX_FILES 128
 static FIL fil_structures[MAX_FILES];
 #if FF_USE_FASTSEEK
-/* 四项足以描述一个连续文件；碎片文件会安全退回普通定位。 */
-#define FATFS_CLMT_ITEMS 4
-static DWORD fil_clmt[MAX_FILES][FATFS_CLMT_ITEMS];
+/* 连续文件使用四项静态表，碎片文件按实际需求动态扩展。 */
+#define FATFS_CLMT_STATIC_ITEMS 4
+#define FATFS_CLMT_MAX_ITEMS 4096
+static DWORD fil_clmt[MAX_FILES][FATFS_CLMT_STATIC_ITEMS];
+static DWORD *fil_dynamic_clmt[MAX_FILES];
+
+extern void *malloc(int size);
+extern void free(void *ptr);
 #endif
 
 #define MAX_DIRS 16
@@ -374,6 +379,8 @@ static int fs_open(iop_file_t *fd, const char *name, int flags, int mode)
     FIL *file;
     int file_index;
     FRESULT map_result;
+    DWORD required_clmt_items;
+    DWORD *dynamic_clmt;
 #endif
     FATFS_FS_DRIVER_NAME_ALLOC_ON_STACK_DEFINITIONS(name);
 
@@ -413,8 +420,29 @@ static int fs_open(iop_file_t *fd, const char *name, int flags, int mode)
             file           = fd->privdata;
             file_index     = file - fil_structures;
             file->cltbl    = fil_clmt[file_index];
-            file->cltbl[0] = FATFS_CLMT_ITEMS;
+            file->cltbl[0] = FATFS_CLMT_STATIC_ITEMS;
             map_result     = f_lseek(file, CREATE_LINKMAP);
+
+            if (map_result == FR_NOT_ENOUGH_CORE) {
+                required_clmt_items = file->cltbl[0];
+                file->cltbl = NULL;
+
+                if (required_clmt_items <= FATFS_CLMT_MAX_ITEMS) {
+                    dynamic_clmt = malloc(required_clmt_items * sizeof(DWORD));
+                    if (dynamic_clmt) {
+                        dynamic_clmt[0] = required_clmt_items;
+                        file->cltbl     = dynamic_clmt;
+                        map_result     = f_lseek(file, CREATE_LINKMAP);
+
+                        if (map_result == FR_OK) {
+                            fil_dynamic_clmt[file_index] = dynamic_clmt;
+                        } else {
+                            file->cltbl = NULL;
+                            free(dynamic_clmt);
+                        }
+                    }
+                }
+            }
 
             if (map_result == FR_NOT_ENOUGH_CORE) {
                 file->cltbl = NULL;
@@ -440,11 +468,26 @@ static int fs_close(iop_file_t *fd)
     M_DEBUG("%s\n", __func__);
 
     int ret = FR_OK;
+#if FF_USE_FASTSEEK
+    FIL *file;
+    int file_index;
+#endif
 
     _fs_lock();
 
     if (fd->privdata) {
+#if FF_USE_FASTSEEK
+        file       = fd->privdata;
+        file_index = file - fil_structures;
+        ret        = f_close(file);
+        if (fil_dynamic_clmt[file_index]) {
+            file->cltbl = NULL;
+            free(fil_dynamic_clmt[file_index]);
+            fil_dynamic_clmt[file_index] = NULL;
+        }
+#else
         ret = f_close(fd->privdata);
+#endif
         fd->privdata = NULL;
     }
 
