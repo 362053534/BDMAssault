@@ -5,6 +5,7 @@
 #include <loadcore.h>
 #include <sifcmd.h>
 #include <stdio.h>
+#include <string.h>
 
 // #define DEBUG  //comment out this line when not debugging
 #include "include/module_debug.h"
