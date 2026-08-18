@@ -3,6 +3,10 @@ loadcore_IMPORTS_start
 I_RegisterLibraryEntries
 loadcore_IMPORTS_end
 
+sifcmd_IMPORTS_start
+I_sceSifGetOtherData
+sifcmd_IMPORTS_end
+
 stdio_IMPORTS_start
 I_printf
 stdio_IMPORTS_end

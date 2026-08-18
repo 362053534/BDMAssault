@@ -49,6 +49,15 @@ enum popstarter_mount_state {
 
 static enum popstarter_mount_state g_popstarter_mount_state;
 static char g_popstarter_vcd_path[POPSTARTER_VCD_PATH_MAX];
+static int g_popstarter_vcd_configured;
+
+static int popstarter_vcd_suffix_matches(const char *suffix)
+{
+    return suffix[0] == '.' &&
+           (suffix[1] == 'V' || suffix[1] == 'v') &&
+           (suffix[2] == 'C' || suffix[2] == 'c') &&
+           (suffix[3] == 'D' || suffix[3] == 'd');
+}
 
 // Macros for defining the modified path on stack.
 #define FATFS_FS_DRIVER_NAME_ALLOC_ON_STACK_DEFINITIONS(varname) \
@@ -136,7 +145,32 @@ static void fatfs_fs_driver_initialize_all_mount_info(void)
     }
 
     g_popstarter_mount_state = POPSTARTER_UNSELECTED;
+}
+
+int bdm_set_popstarter_vcd_path(const char *vcd_path)
+{
+    unsigned int path_length;
+
+    /* 该入口只能在InitFS()前由组合模块启动代码调用。 */
+    if (_fs_lock_sema_id >= 0)
+        return -1;
+
     g_popstarter_vcd_path[0] = '\0';
+    if (!vcd_path)
+        return -1;
+
+    path_length = strlen(vcd_path);
+    if (path_length <= sizeof(POPSTARTER_VCD_PREFIX) - 1 + sizeof(POPSTARTER_VCD_SUFFIX) - 1 ||
+        path_length >= sizeof(g_popstarter_vcd_path))
+        return -1;
+    if (memcmp(vcd_path, POPSTARTER_VCD_PREFIX, sizeof(POPSTARTER_VCD_PREFIX) - 1) != 0)
+        return -1;
+    if (!popstarter_vcd_suffix_matches(vcd_path + path_length - (sizeof(POPSTARTER_VCD_SUFFIX) - 1)))
+        return -1;
+
+    memcpy(g_popstarter_vcd_path, vcd_path, path_length + 1);
+    g_popstarter_vcd_configured = 1;
+    return 0;
 }
 
 int bdm_set_popstarter_vcd(int argc, char *argv[])
@@ -149,10 +183,16 @@ int bdm_set_popstarter_vcd(int argc, char *argv[])
     unsigned int suffix_length = sizeof(POPSTARTER_ARG_SUFFIX) - 1;
     int i;
 
-    if (argc <= 0 || !argv)
-        return -1;
-
     _fs_lock();
+    /* EE邮箱已经提供目标VCD时，不再解析不可靠的IRX argv。 */
+    if (g_popstarter_vcd_configured) {
+        _fs_unlock();
+        return 0;
+    }
+    if (argc <= 0 || !argv) {
+        _fs_unlock();
+        return -1;
+    }
     g_popstarter_vcd_path[0] = '\0';
 
     for (i = 0; i < argc; i++) {
