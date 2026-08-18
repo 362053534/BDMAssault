@@ -5,6 +5,7 @@ IOP_BIN = ../usbd.irx
 
 #bdm
 BDM_OBJS = main.o bdm.o part_driver.o part_driver_mbr.o part_driver_gpt.o
+IOP_INCS += -I../bdm/include/
 IOP_LIBS += ../libbdm/lib/libbdm.a
 IOP_CFLAGS += -I../libbdm/include/ -Wno-strict-aliasing
 

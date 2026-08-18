@@ -151,7 +151,7 @@ static void fatfs_fs_driver_initialize_all_mount_info(void)
 
 int bdm_configure_popstarter_source(int bdm_enabled, const char *vcd_path)
 {
-    unsigned int path_length;
+    unsigned int path_length = 0;
 
     /* 该入口只能在InitFS()前由组合模块启动代码调用。 */
     if (_fs_lock_sema_id >= 0)
