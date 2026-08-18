@@ -326,6 +326,11 @@ void disconnect_bd(struct block_device *bd)
 
 #define MAX_FILES 128
 static FIL fil_structures[MAX_FILES];
+#if FF_USE_FASTSEEK
+/* 四项足以描述一个连续文件；碎片文件会安全退回普通定位。 */
+#define FATFS_CLMT_ITEMS 4
+static DWORD fil_clmt[MAX_FILES][FATFS_CLMT_ITEMS];
+#endif
 
 #define MAX_DIRS 16
 static DIR dir_structures[MAX_DIRS];
@@ -365,6 +370,11 @@ static int fs_open(iop_file_t *fd, const char *name, int flags, int mode)
 
     int ret;
     BYTE f_mode = FA_OPEN_EXISTING;
+#if FF_USE_FASTSEEK
+    FIL *file;
+    int file_index;
+    FRESULT map_result;
+#endif
     FATFS_FS_DRIVER_NAME_ALLOC_ON_STACK_DEFINITIONS(name);
 
     (void)mode;
@@ -398,7 +408,26 @@ static int fs_open(iop_file_t *fd, const char *name, int flags, int mode)
         fd->privdata = NULL;
         ret          = -ret;
     } else {
-        ret = 1;
+#if FF_USE_FASTSEEK
+        if ((f_mode & FA_READ) && !(f_mode & FA_WRITE)) {
+            file           = fd->privdata;
+            file_index     = file - fil_structures;
+            file->cltbl    = fil_clmt[file_index];
+            file->cltbl[0] = FATFS_CLMT_ITEMS;
+            map_result     = f_lseek(file, CREATE_LINKMAP);
+
+            if (map_result == FR_NOT_ENOUGH_CORE) {
+                file->cltbl = NULL;
+            } else if (map_result != FR_OK) {
+                file->cltbl = NULL;
+                f_close(file);
+                fd->privdata = NULL;
+                ret          = -map_result;
+            }
+        }
+#endif
+        if (ret == FR_OK)
+            ret = 1;
     }
 
     _fs_unlock();
