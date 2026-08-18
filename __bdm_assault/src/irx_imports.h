@@ -21,6 +21,7 @@
 #include <ioman.h>
 #include <intrman.h>
 #include <loadcore.h>
+#include <sifcmd.h>
 #include <stdio.h>
 #include <sysclib.h>
 #include <sysmem.h>
