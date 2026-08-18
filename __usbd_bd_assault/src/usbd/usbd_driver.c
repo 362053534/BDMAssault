@@ -271,7 +271,7 @@ int initCallbackThread(void)
     thread.option    = 0;
     thread.thread    = callbackThreadFunc;
 #ifndef MINI_DRIVER
-    thread.stacksize = 0x0800; // 2KiB：POPS单个MASS设备不需要16KiB线程栈
+    thread.stacksize = 0x4000; // 16KiB
 #else
     thread.stacksize = 0x0800; //  2KiB
 #endif

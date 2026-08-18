@@ -32,14 +32,14 @@ extern struct irx_export_table _exp_usbd __attribute__((section("data")));
 
 #ifndef MINI_DRIVER
 UsbdConfig usbConfig = {
-    0x10,  // maxDevices
-    0x20,  // maxEndpoints
-    0x40,  // maxTransDesc
-    0x40,  // maxIsoTransfDesc
+    0x20,  // maxDevices
+    0x40,  // maxEndpoints
+    0x80,  // maxTransDesc
+    0x80,  // maxIsoTransfDesc
     0x100, // maxIoReqs
     0x200, // maxStaticDescSize
-    4,     // maxHubDevices
-    4,     // maxPortsPerHub
+    8,     // maxHubDevices
+    8,     // maxPortsPerHub
 
     0x1E, // hcdThreadPrio
     0x24  // cbThreadPrio
