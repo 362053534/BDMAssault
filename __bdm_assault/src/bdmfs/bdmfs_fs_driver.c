@@ -32,9 +32,8 @@ fatfs_fs_driver_mount_info fs_driver_mount_info[FF_VOLUMES];
 
 #define FATFS_FS_DRIVER_MOUNT_INFO_MAX ((int)(sizeof(fs_driver_mount_info) / sizeof(fs_driver_mount_info[0])))
 #define POPSTARTER_DIR_PATH "0:/POPS"
-#define POPSTARTER_ARG_PREFIX_XX "uLE:XX."
-#define POPSTARTER_ARG_PREFIX_SB "uLE:SB."
-#define POPSTARTER_ARG_PREFIX "uLE:"
+#define POPSTARTER_ARG_PREFIX_XX "XX."
+#define POPSTARTER_ARG_PREFIX_SB "SB."
 #define POPSTARTER_ARG_SUFFIX ".ELF"
 #define POPSTARTER_VCD_PREFIX "0:/POPS/"
 #define POPSTARTER_VCD_SUFFIX ".VCD"
@@ -167,18 +166,15 @@ int bdm_set_popstarter_vcd(int argc, char *argv[])
         if (memcmp(arg + arg_length - suffix_length, POPSTARTER_ARG_SUFFIX, suffix_length) != 0)
             continue;
 
-        /* 先匹配较长前缀，避免通用uLE:保留XX.或SB.。 */
+        /* XX.和SB.是可选的启动类型前缀；其他名称按无前缀处理。 */
         if (arg_length >= sizeof(POPSTARTER_ARG_PREFIX_XX) - 1 &&
             memcmp(arg, POPSTARTER_ARG_PREFIX_XX, sizeof(POPSTARTER_ARG_PREFIX_XX) - 1) == 0)
             arg_prefix_length = sizeof(POPSTARTER_ARG_PREFIX_XX) - 1;
         else if (arg_length >= sizeof(POPSTARTER_ARG_PREFIX_SB) - 1 &&
                  memcmp(arg, POPSTARTER_ARG_PREFIX_SB, sizeof(POPSTARTER_ARG_PREFIX_SB) - 1) == 0)
             arg_prefix_length = sizeof(POPSTARTER_ARG_PREFIX_SB) - 1;
-        else if (arg_length >= sizeof(POPSTARTER_ARG_PREFIX) - 1 &&
-                 memcmp(arg, POPSTARTER_ARG_PREFIX, sizeof(POPSTARTER_ARG_PREFIX) - 1) == 0)
-            arg_prefix_length = sizeof(POPSTARTER_ARG_PREFIX) - 1;
         else
-            continue;
+            arg_prefix_length = 0;
 
         if (arg_length <= arg_prefix_length + suffix_length)
             continue;
