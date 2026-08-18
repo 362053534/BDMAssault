@@ -36,7 +36,7 @@ int usbmass_bd_start(int argc, char *argv[])
 
     /* 只等待内存中的FatFs挂载状态，避免探测目录时提前读盘。 */
     while (!bdm_is_usb_fatfs_ready())
-        DelayThread(50000);
+        DelayThread(200000);
 
     // return resident
     return MODULE_RESIDENT_END;
