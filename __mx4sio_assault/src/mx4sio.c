@@ -22,8 +22,6 @@ IRX_ID("mx4sio", 1, 2);
 dma_command_t cmd;
 int sio2_event_flag;
 
-static int sd_detect_thread_id = -1;
-static volatile int sd_detect_thread_stop = 0;
 static sio2_transfer_data_t global_td;
 static uint8_t sio2_current_baud = SIO2_BAUD_DIV_SLOW;
 static uint32_t sio2_save_crtl;
@@ -684,28 +682,6 @@ static void sd_detect()
     mx_sio2_unlock(INTR_NONE);
 }
 
-static void sd_detect_thread(void *arg)
-{
-    (void)arg;
-
-    M_PRINTF("card detection thread running\n");
-
-    while (!sd_detect_thread_stop) {
-        DelayThread(1000 * 1000);
-
-        if (sd_detect_thread_stop)
-            break;
-
-        /* try to detect card removal if it hasn't been used recently */
-        if (sdcard.used == 0)
-            sd_detect();
-        sdcard.used = 0;
-    }
-
-    ExitDeleteThread();
-}
-
-
 /* Maximus32's C r3000 optimized byte reversal */
 /* 58-59uS avg on DECKARD */
 #pragma GCC push_options
@@ -772,7 +748,6 @@ int module_start(int argc, char *argv[])
 {
     iop_library_t *lib_modload;
     iop_event_t event;
-    iop_thread_t thread;
     int rv;
 
 #ifndef MINI_DRIVER
@@ -819,31 +794,11 @@ int module_start(int argc, char *argv[])
     (void)mx_sio2_rx_pio((void *)&rv, 4);
     mx_sio2_unlock(INTR_NONE);
 
-    /* create SD card detection thread */
-    thread.attr      = TH_C;
-    thread.thread    = sd_detect_thread;
-    thread.option    = 0;
-    thread.priority  = USER_LOWEST_PRIORITY;
-    thread.stacksize = 0x1000; // 4KiB
-    rv = sd_detect_thread_id = CreateThread(&thread);
-    if (rv < 0) {
-        M_PRINTF("ERROR: CreateThread returned %d\n", rv);
-        goto error3;
-    }
-
     /* 同步初始化SD卡，并等待对应的FatFs挂载完成。 */
     while (!bdm_is_fatfs_ready("sdc")) {
         if (!sdcard.initialized)
             sd_detect();
         DelayThread(200 * 1000);
-    }
-
-    /* Start thread */
-    sd_detect_thread_stop = 0;
-    rv = StartThread(sd_detect_thread_id, NULL);
-    if (rv < 0) {
-        M_PRINTF("ERROR: StartThread returned %d\n", rv);
-        goto error4;
     }
 
     lib_modload = ioplib_getByName("modload");
@@ -859,14 +814,6 @@ int module_start(int argc, char *argv[])
 
     return MODULE_RESIDENT_END;
 
-error4:
-    if (sdcard.initialized) {
-        bdm_disconnect_bd(&bd);
-        sdcard.initialized = 0;
-    }
-    DeleteThread(sd_detect_thread_id);
-error3:
-    sio2man_hook_deinit();
 error2:
     DeleteEventFlag(sio2_event_flag);
 error1:
@@ -875,8 +822,6 @@ error1:
 
 int module_stop(int argc, char *argv[])
 {
-    iop_thread_info_t thread_info;
-
 #ifndef MINI_DRIVER
     int i;
 
@@ -887,11 +832,6 @@ int module_stop(int argc, char *argv[])
     (void)argc;
     (void)argv;
 #endif
-
-    sd_detect_thread_stop = 1;
-    while (ReferThreadStatus(sd_detect_thread_id, &thread_info) >= 0)
-        DelayThread(1000);
-    sd_detect_thread_id = -1;
 
     if (sdcard.initialized) {
         mx_sio2_lock(INTR_NONE);
