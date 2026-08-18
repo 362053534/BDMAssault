@@ -215,15 +215,40 @@ int setupBulkTransfer(Endpoint *ep)
 {
     IoRequest *curIoReq = ep->ioReqListStart;
 
-    HcED *ed    = &ep->hcEd;
-    HcTD *curTd = ed->tdTail;
+    HcED *ed             = &ep->hcEd;
+    HcTD *curTd          = ed->tdTail;
     HcTD *newTd;
+    HcTD *nextTd;
+    HcTD *newTdListStart = NULL;
+    HcTD *newTdListEnd   = NULL;
+    u8 *buffer;
+    u32 remaining;
+    u32 chunkLength;
+    u32 tdCount;
 
     if (ep->hcEd.tdTail && !ED_HALTED(ep->hcEd) && !ED_SKIPPED(ep->hcEd) && curIoReq) {
-        newTd = allocTd();
-        if (!newTd) {
-            enqueueEndpoint(ep, GENTD_QUEUE);
-            return 0;
+        /* 旧的尾TD作为第一个数据TD，因此每个数据块只需再分配一个TD。 */
+        tdCount = curIoReq->length ?
+                      (curIoReq->length + GENTD_MAX_TRANSFER_SIZE - 1) / GENTD_MAX_TRANSFER_SIZE :
+                      1;
+        while (tdCount > 0) {
+            newTd = allocTd();
+            if (!newTd) {
+                while (newTdListStart) {
+                    nextTd        = newTdListStart->next;
+                    freeTd(newTdListStart);
+                    newTdListStart = nextTd;
+                }
+                enqueueEndpoint(ep, GENTD_QUEUE);
+                return 0;
+            }
+
+            if (newTdListEnd)
+                newTdListEnd->next = newTd;
+            else
+                newTdListStart = newTd;
+            newTdListEnd = newTd;
+            tdCount--;
         }
 
         if (curIoReq->next)
@@ -236,18 +261,34 @@ int setupBulkTransfer(Endpoint *ep)
         else
             ep->ioReqListStart = curIoReq->next;
 
-        curTd->HcArea    = TD_HCAREA(USB_RC_NOTACCESSED, 0, 0, 3, 1) << 16;
-        curTd->next      = newTd;
-        curTd->curBufPtr = curIoReq->destPtr;
+        buffer    = curIoReq->destPtr;
+        remaining = curIoReq->length;
+        newTd     = newTdListStart;
+        while (newTd) {
+            nextTd = newTd->next;
+            chunkLength = remaining > GENTD_MAX_TRANSFER_SIZE ? GENTD_MAX_TRANSFER_SIZE : remaining;
 
-        if (curIoReq->destPtr && curIoReq->length)
-            curTd->bufferEnd = (u8 *)curIoReq->destPtr + curIoReq->length - 1;
-        else
-            curTd->bufferEnd = NULL;
+            /* 中间TD延迟中断，既合并正常完成通知，也保证错误能够被回收。 */
+            curTd->HcArea = TD_HCAREA(USB_RC_NOTACCESSED, 0,
+                                      remaining > chunkLength ? 6 : 0, 3, 1)
+                            << 16;
+            curTd->next      = newTd;
+            curTd->curBufPtr = buffer;
+            if (buffer && chunkLength)
+                curTd->bufferEnd = buffer + chunkLength - 1;
+            else
+                curTd->bufferEnd = NULL;
 
-        memPool.hcTdToIoReqLUT[curTd - memPool.hcTdBuf] = curIoReq;
+            memPool.hcTdToIoReqLUT[curTd - memPool.hcTdBuf] = curIoReq;
 
-        ed->tdTail = newTd;
+            if (buffer)
+                buffer += chunkLength;
+            remaining -= chunkLength;
+            curTd = newTd;
+            newTd = nextTd;
+        }
+
+        ed->tdTail = curTd;
 
         if (ep->endpointType == TYPE_BULK)
             memPool.ohciRegs->HcCommandStatus |= OHCI_COM_BLF; // Bulk List Filled
@@ -274,7 +315,7 @@ void handleIoReqList(Endpoint *ep)
         setupBulkTransfer(ep);
 }
 
-int attachIoReqToEndpoint(Endpoint *ep, IoRequest *req, void *destdata, u16 length, void *callback)
+int attachIoReqToEndpoint(Endpoint *ep, IoRequest *req, void *destdata, u32 length, void *callback)
 {
     if (!ep->correspDevice)
         return USB_RC_BUSY;

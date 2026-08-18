@@ -336,11 +336,17 @@ int sceUsbdTransferPipe(int id, void *data, u32 len, void *option, sceUsbdDoneCa
         res = USB_RC_BADPIPE;
     }
 
+    if ((res == 0) &&
+        ((ep->endpointType == TYPE_BULK) || (ep->endpointType < TYPE_CONTROL)) &&
+        (len > BULK_MAX_TRANSFER_SIZE))
+        res = USB_RC_BADLENGTH;
+
     if ((res == 0) && data && len) {
-        if ((((u32)((u8 *)data + len - 1) >> 12) - ((u32)data >> 12)) > 1)
-            res = USB_RC_BADLENGTH;
-        else if (ep->alignFlag && ((u32)data & 3))
+        if (ep->alignFlag && ((u32)data & 3))
             res = USB_RC_BADALIGN;
+        else if ((ep->endpointType != TYPE_BULK) && (ep->endpointType >= TYPE_CONTROL) &&
+                 ((((u32)((u8 *)data + len - 1) >> 12) - ((u32)data >> 12)) > 1))
+            res = USB_RC_BADLENGTH;
         else if ((ep->endpointType == TYPE_ISOCHRON) && ((ep->hcEd.maxPacketSize & 0x7FF) < len))
             res = USB_RC_BADLENGTH;
     }

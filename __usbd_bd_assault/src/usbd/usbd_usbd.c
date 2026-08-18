@@ -185,9 +185,12 @@ void processDoneQueue_GenTd(HcTD *arg)
 
         if (arg->bufferEnd && (tdHcArea & 0x180000)) { // dir != SETUP
             if (arg->curBufPtr == 0)                   // transfer successful
-                req->transferedBytes = req->length;
+                req->transferedBytes = (u8 *)arg->bufferEnd - (u8 *)req->destPtr + 1;
             else
                 req->transferedBytes = (u8 *)arg->curBufPtr - (u8 *)req->destPtr;
+
+            if (req->transferedBytes > req->length)
+                req->transferedBytes = req->length;
         }
         hcRes = tdHcArea >> 28;
         freeTd(arg);
@@ -195,7 +198,8 @@ void processDoneQueue_GenTd(HcTD *arg)
         if (req->resultCode == USB_RC_OK)
             req->resultCode = hcRes;
 
-        if (hcRes || ((tdHcArea & 0xE00000) != 0xE00000)) { // E00000: interrupts disabled
+        /* 只有末尾TD或错误TD结束整个逻辑请求，中间TD即使触发延迟中断也不回调。 */
+        if (hcRes || ((tdHcArea & 0xE00000) == 0)) {
             req->prev = lastElem;
 #if 0
             // lastElem is NULL, so this condition is always false

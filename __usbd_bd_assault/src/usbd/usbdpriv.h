@@ -251,6 +251,11 @@ typedef struct _memPool
 #define TYPE_BULK     0x40
 #define TYPE_ISOCHRON 0x41
 
+/* 每个通用TD固定限制为4KiB，避免跨越两个以上的内存页。 */
+#define GENTD_MAX_TRANSFER_SIZE 0x1000
+/* 单个逻辑批量请求最多64KiB，由多个4KiB TD组成。 */
+#define BULK_MAX_TRANSFER_SIZE  0x10000
+
 #define DEVICE_NOTCONNECTED  0
 #define DEVICE_CONNECTED     1
 #define DEVICE_RESETDELAYED  2

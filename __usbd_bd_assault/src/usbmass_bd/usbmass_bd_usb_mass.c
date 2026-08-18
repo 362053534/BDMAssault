@@ -79,7 +79,10 @@ typedef struct _usb_callback_data
     int returnSize;
 } usb_callback_data;
 
-#define USB_BLOCK_SIZE 4096 // Maximum single USB 1.1 transfer length.
+/* 同步传输一次提交64KiB，由USBD在内部拆分为多个4KiB TD。 */
+#define USB_BULK_REQUEST_SIZE (64 * 1024)
+/* 异步实验路径保持原有的4KiB提交粒度。 */
+#define USB_ASYNC_BLOCK_SIZE 4096
 
 typedef struct _usb_transfer_callback_data
 {
@@ -116,9 +119,7 @@ static int perform_bulk_transfer(usb_transfer_callback_data *data)
     int ret;
     unsigned int len;
 
-    /* OHCI的单个TD最多覆盖两个4KiB内存页。根据缓冲区的页内偏移
-       动态计算安全长度，减少固定4KiB切块造成的中断与回调往返。 */
-    len = 0x2000 - ((u32)data->buffer & 0x0fff);
+    len = USB_BULK_REQUEST_SIZE;
     if (len > data->remaining)
         len = data->remaining;
     ret = sceUsbdBulkTransfer(
@@ -503,7 +504,7 @@ int usb_queue_cmd(struct scsi_interface *scsi, const unsigned char *cmd, unsigne
 
     // Send/Receive data
     while (data_len > 0) {
-        unsigned int tr_len = (data_len < USB_BLOCK_SIZE) ? data_len : USB_BLOCK_SIZE;
+        unsigned int tr_len = (data_len < USB_ASYNC_BLOCK_SIZE) ? data_len : USB_ASYNC_BLOCK_SIZE;
         ucmd.cmd_count++;
         result = sceUsbdBulkTransfer(data_wr ? dev->bulkEpO : dev->bulkEpI, data, tr_len, scsi_cmd_callback, (void *)&ucmd);
         if (result != USB_RC_OK)

@@ -22,7 +22,7 @@ void handleIoReqList(Endpoint *ep);
 int doControlTransfer(Endpoint *ep, IoRequest *req,
                       u8 requestType, u8 request, u16 value, u16 index, u16 length,
                       void *destdata, void *callback);
-int attachIoReqToEndpoint(Endpoint *ep, IoRequest *req, void *destdata, u16 length, void *callback);
+int attachIoReqToEndpoint(Endpoint *ep, IoRequest *req, void *destdata, u32 length, void *callback);
 void handleIoReqList(Endpoint *ep);
 
 #endif // __USBIO_H__

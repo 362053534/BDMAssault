@@ -228,6 +228,7 @@ int addTimerCallback(TimerCbStruct *arg, TimerCallback func, void *cbArg, u32 de
 void killEndpoint(Endpoint *ep)
 {
     int i = 0;
+    int j;
     IoRequest *req;
     HcED *hcEd = &ep->hcEd;
     if (ep->endpointType == TYPE_ISOCHRON) {
@@ -244,9 +245,14 @@ void killEndpoint(Endpoint *ep)
         for (i = 0; i < usbConfig.maxTransfDesc; i++) {
             req = memPool.hcTdToIoReqLUT[i];
             if (req && (req->correspEndpoint == ep)) {
+                /* 一个逻辑请求可能占用多个TD，必须只释放一次IoRequest。 */
+                for (j = i; j < usbConfig.maxTransfDesc; j++) {
+                    if (memPool.hcTdToIoReqLUT[j] == req) {
+                        memPool.hcTdToIoReqLUT[j] = NULL;
+                        freeTd(memPool.hcTdBuf + j);
+                    }
+                }
                 freeIoRequest(req);
-                memPool.hcTdToIoReqLUT[i] = NULL;
-                freeTd(memPool.hcTdBuf + i);
             }
         }
         freeTd(hcEd->tdTail);
