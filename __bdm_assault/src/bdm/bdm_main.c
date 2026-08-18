@@ -4,7 +4,6 @@
 #include <sifcmd.h>
 #include <stdio.h>
 #include <string.h>
-#include <thbase.h>
 
 // #define DEBUG  //comment out this line when not debugging
 #include "include/module_debug.h"
@@ -107,17 +106,10 @@ int _start(int argc, char *argv[])
     printf("Block Device Manager (BDM) v%d.%d\n", MAJOR_VER, MINOR_VER);
 
     /* POPStarter传入的IRX参数不包含游戏路径，必须从EE常驻邮箱读取。 */
-    if (pops_boot_mailbox_read() < 0) {
-        M_PRINTF("ERROR: Invalid POPStarter boot mailbox!\n");
-        /* 诊断阶段禁止把控制权还给POPStarter，确保成功启动只能来自有效EE邮箱。 */
-        while (1)
-            DelayThread(1000000);
-    }
-    if (bdm_set_popstarter_vcd_path(g_pops_boot_mailbox.vcdPath) < 0) {
-        M_PRINTF("ERROR: Invalid POPStarter VCD path!\n");
-        /* 路径无效同样永久等待，避免旧驱动或旧mass0掩盖邮箱失败。 */
-        while (1)
-            DelayThread(1000000);
+    if (pops_boot_mailbox_read() < 0 ||
+        bdm_set_popstarter_vcd_path(g_pops_boot_mailbox.vcdPath) < 0) {
+        /* 没有可靠的VCD名字时继续启动，FatFs改为等待POPS_IOX.PAK。 */
+        bdm_set_popstarter_vcd_path(NULL);
     }
 
     if (RegisterLibraryEntries(&_exp_bdm) != 0) {
