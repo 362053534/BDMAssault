@@ -520,7 +520,7 @@ int hcdInit(void)
     thread.option    = 0;
     thread.thread    = hcdIrqThread;
 #ifndef MINI_DRIVER
-    thread.stacksize = 0x0800; // 栈大小 2KiB
+    thread.stacksize = 0x4000; // 栈大小 16KiB
 #else
     thread.stacksize = 0x0800; //  2KiB
 #endif

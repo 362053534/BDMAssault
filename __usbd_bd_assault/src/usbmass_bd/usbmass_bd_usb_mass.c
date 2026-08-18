@@ -113,9 +113,14 @@ static void usb_callback(int resultCode, int bytes, void *arg)
 #ifndef ASYNC
 static int perform_bulk_transfer(usb_transfer_callback_data *data)
 {
-    int ret, len;
+    int ret;
+    unsigned int len;
 
-    len = data->remaining > USB_BLOCK_SIZE ? USB_BLOCK_SIZE : data->remaining;
+    /* OHCI的单个TD最多覆盖两个4KiB内存页。根据缓冲区的页内偏移
+       动态计算安全长度，减少固定4KiB切块造成的中断与回调往返。 */
+    len = 0x2000 - ((u32)data->buffer & 0x0fff);
+    if (len > data->remaining)
+        len = data->remaining;
     ret = sceUsbdBulkTransfer(
         data->pipe,   // bulk pipe epI (Read) or epO (Write)
         data->buffer, // data ptr
