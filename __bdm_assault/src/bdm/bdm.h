@@ -67,7 +67,6 @@ void bdm_RegisterCallback(bdm_cb cb);
 void bdm_set_ata_only(int enable);
 int bdm_is_usb_fatfs_ready(void);
 int bdm_is_fatfs_ready(const char *device_name);
-int bdm_set_popstarter_vcd(int argc, char *argv[]);
 
 #define bdm_IMPORTS_start DECLARE_IMPORT_TABLE(bdm, 1, 1)
 #define bdm_IMPORTS_end   END_IMPORT_TABLE
@@ -81,6 +80,5 @@ int bdm_set_popstarter_vcd(int argc, char *argv[]);
 #define I_bdm_set_ata_only     DECLARE_IMPORT(10, bdm_set_ata_only)
 #define I_bdm_is_usb_fatfs_ready DECLARE_IMPORT(11, bdm_is_usb_fatfs_ready)
 #define I_bdm_is_fatfs_ready   DECLARE_IMPORT(12, bdm_is_fatfs_ready)
-#define I_bdm_set_popstarter_vcd DECLARE_IMPORT(13, bdm_set_popstarter_vcd)
 
 #endif

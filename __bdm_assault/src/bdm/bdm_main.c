@@ -3,6 +3,7 @@
 #include <ioman.h>
 #include <irx.h>
 #include <loadcore.h>
+#include <sifcmd.h>
 #include <stdio.h>
 
 // #define DEBUG  //comment out this line when not debugging
@@ -21,7 +22,91 @@ extern int bdmfs_fatfs_start(int argc, char *argv[]);
 #define VCD_ARGV_TRACE_MAX_ARGS 16
 #define VCD_ARGV_TRACE_MAX_TEXT 255
 
+#define POPS_BOOT_MAILBOX_ADDRESS  0x01FF0000
+#define POPS_BOOT_MAILBOX_MAGIC    0x53504F50
+#define POPS_BOOT_MAILBOX_VERSION  1
+#define POPS_BOOT_MAILBOX_PATH_MAX 256
+
+typedef struct
+{
+    u32 magic;
+    u16 version;
+    u16 size;
+    u32 deviceType;
+    char vcdPath[POPS_BOOT_MAILBOX_PATH_MAX];
+    u32 checksum;
+} pops_boot_mailbox_t;
+
+typedef char pops_boot_mailbox_size_must_be_272[(sizeof(pops_boot_mailbox_t) == 272) ? 1 : -1];
+
 static int g_vcd_argv_trace_initialized;
+static pops_boot_mailbox_t g_pops_boot_mailbox __attribute__((aligned(64)));
+static int g_pops_boot_mailbox_valid;
+
+static u32 pops_boot_mailbox_checksum(const pops_boot_mailbox_t *mailbox)
+{
+    const u8 *data = (const u8 *)mailbox;
+    u32 checksum = 0x424F4F54;
+    unsigned int i;
+
+    for (i = 0; i < sizeof(*mailbox) - sizeof(mailbox->checksum); i++) {
+        checksum = (checksum << 5) | (checksum >> 27);
+        checksum ^= data[i];
+    }
+
+    return checksum;
+}
+
+static int pops_boot_mailbox_is_valid(const pops_boot_mailbox_t *mailbox)
+{
+    unsigned int i;
+
+    if (mailbox->magic != POPS_BOOT_MAILBOX_MAGIC ||
+        mailbox->version != POPS_BOOT_MAILBOX_VERSION ||
+        mailbox->size != sizeof(*mailbox) ||
+        mailbox->deviceType > 3 ||
+        mailbox->checksum != pops_boot_mailbox_checksum(mailbox))
+        return 0;
+
+    if (mailbox->vcdPath[0] != '0' || mailbox->vcdPath[1] != ':' || mailbox->vcdPath[2] != '/')
+        return 0;
+
+    for (i = 3; i < sizeof(mailbox->vcdPath); i++) {
+        if (mailbox->vcdPath[i] == '\0')
+            return i > 3;
+    }
+
+    return 0;
+}
+
+static int pops_boot_mailbox_read(void)
+{
+    SifRpcReceiveData_t receiveData;
+
+    memset(&g_pops_boot_mailbox, 0, sizeof(g_pops_boot_mailbox));
+    g_pops_boot_mailbox_valid = 0;
+
+    sceSifInitRpc(0);
+    if (sceSifGetOtherData(&receiveData, (void *)POPS_BOOT_MAILBOX_ADDRESS,
+                           &g_pops_boot_mailbox, sizeof(g_pops_boot_mailbox), 0) < 0)
+        return -1;
+
+    if (!pops_boot_mailbox_is_valid(&g_pops_boot_mailbox))
+        return -2;
+
+    g_pops_boot_mailbox_valid = 1;
+    return 0;
+}
+
+int bdm_get_popstarter_target(unsigned int *deviceType, const char **vcdPath)
+{
+    if (!g_pops_boot_mailbox_valid || deviceType == NULL || vcdPath == NULL)
+        return -1;
+
+    *deviceType = g_pops_boot_mailbox.deviceType;
+    *vcdPath = g_pops_boot_mailbox.vcdPath;
+    return 0;
+}
 
 static int vcd_argv_trace_strlen(const char *text, int limit)
 {
@@ -166,7 +251,7 @@ void bdm_trace_popstarter_vcd_args(const char *module, int argc, char *argv[])
         g_vcd_argv_trace_initialized = 1;
 }
 
-static void vcd_argv_trace_result_to_slot(const char *path, int index, const char *prefix, const char *target)
+static void vcd_argv_trace_mailbox_to_slot(const char *path, int result)
 {
     int fd;
 
@@ -174,31 +259,38 @@ static void vcd_argv_trace_result_to_slot(const char *path, int index, const cha
     if (fd < 0)
         return;
 
-    vcd_argv_trace_write_text(fd, "[DEBUG-VCD-ARGV] module=vcd-parser result=");
-    if (index < 0) {
-        vcd_argv_trace_write_text(fd, "no-match\n");
-    } else {
-        vcd_argv_trace_write_text(fd, "matched argv[");
-        vcd_argv_trace_write_number(fd, index);
-        vcd_argv_trace_write_text(fd, "] prefix=");
-        vcd_argv_trace_write_text(fd, prefix);
+    vcd_argv_trace_write_text(fd, "[DEBUG-VCD-ARGV] module=ee-mailbox result=");
+    if (result == 0) {
+        vcd_argv_trace_write_text(fd, "valid type=");
+        vcd_argv_trace_write_number(fd, g_pops_boot_mailbox.deviceType);
         vcd_argv_trace_write_text(fd, " target=");
-        vcd_argv_trace_write_text(fd, target);
+        vcd_argv_trace_write_text(fd, g_pops_boot_mailbox.vcdPath);
         vcd_argv_trace_write(fd, "\n", 1);
+    } else if (result == -1) {
+        vcd_argv_trace_write_text(fd, "transfer-failed\n");
+    } else {
+        vcd_argv_trace_write_text(fd, "invalid\n");
     }
 
     close(fd);
 }
 
-void bdm_trace_popstarter_vcd_result(int index, const char *prefix, const char *target)
+static void vcd_argv_trace_mailbox(int result)
 {
-    vcd_argv_trace_result_to_slot("mc0:/POPSTARTER/IRX-ARGV.TXT", index, prefix, target);
-    vcd_argv_trace_result_to_slot("mc1:/POPSTARTER/IRX-ARGV.TXT", index, prefix, target);
+    vcd_argv_trace_mailbox_to_slot("mc0:/POPSTARTER/IRX-ARGV.TXT", result);
+    vcd_argv_trace_mailbox_to_slot("mc1:/POPSTARTER/IRX-ARGV.TXT", result);
 }
 
 int _start(int argc, char *argv[])
 {
+    int mailboxResult;
+
     bdm_trace_popstarter_vcd_args("usbd", argc, argv);
+
+    mailboxResult = pops_boot_mailbox_read();
+    vcd_argv_trace_mailbox(mailboxResult);
+    if (mailboxResult < 0)
+        return MODULE_NO_RESIDENT_END;
 
     printf("Block Device Manager (BDM) v%d.%d\n", MAJOR_VER, MINOR_VER);
 

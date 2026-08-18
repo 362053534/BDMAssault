@@ -58,10 +58,8 @@ int _start(int argc, char *argv[])
     /* 不要把POPStarter传入的argv转给DEV9（未知-xxx参数会直接失败退出） */
     char *dev9_argv[1];
 
-    if (bdm_set_popstarter_vcd(argc, argv) < 0) {
-        printf("bdm_hdd: invalid POPStarter VCD argument.\n");
-        return MODULE_NO_RESIDENT_END;
-    }
+    (void)argc;
+    (void)argv;
 
     /* 在ATA接入前设置过滤器；不要在此处主动断开其他设备。 */
     bdm_set_ata_only(1);

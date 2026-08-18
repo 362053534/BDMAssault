@@ -59,6 +59,11 @@ I_write
 I_lseek
 ioman_IMPORTS_end
 
+sifcmd_IMPORTS_start
+I_sceSifInitRpc
+I_sceSifGetOtherData
+sifcmd_IMPORTS_end
+
 thsemap_IMPORTS_start
 I_CreateSema
 I_SignalSema

@@ -758,11 +758,6 @@ int module_start(int argc, char *argv[])
         M_PRINTF(" - argv[%d] = %s\n", i, argv[i]);
 #endif
 
-    if (bdm_set_popstarter_vcd(argc, argv) < 0) {
-        M_PRINTF("ERROR: invalid POPStarter VCD argument!\n");
-        return MODULE_NO_RESIDENT_END;
-    }
-
     /* create default transfer descriptor */
     mx_sio2_init_td(&global_td);
 

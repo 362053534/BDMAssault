@@ -16,6 +16,7 @@ extern fatfs_fs_driver_mount_info fs_driver_mount_info[FF_VOLUMES];
 extern int InitFS(void);
 extern int connect_bd(struct block_device *bd);
 extern void disconnect_bd(struct block_device *bd);
+extern int fatfs_fs_driver_set_popstarter_target(unsigned int deviceType, const char *vcdPath);
 extern struct block_device *fatfs_fs_driver_get_mounted_bd_from_index(int mount_info_index);
 
 #endif
