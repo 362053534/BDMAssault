@@ -56,6 +56,7 @@ I_DelDrv
 I_open
 I_close
 I_write
+I_lseek
 ioman_IMPORTS_end
 
 thsemap_IMPORTS_start
