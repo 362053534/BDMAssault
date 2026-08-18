@@ -6,8 +6,8 @@
 //#define DEBUG  //comment out this line when not debugging
 #include "module_debug.h"
 
-#define SECTORS_PER_BLOCK     8 //  8 * 512b =   4KiB
-#define BLOCK_COUNT          64 // 64 块，总量 256KiB
+#define SECTORS_PER_BLOCK    32 // 每块 32 扇区，共 16KiB
+#define BLOCK_COUNT          16 // 共 16 块，总量 256KiB
 #define BLOCK_WEIGHT_FACTOR 256 // Fixed point math (24.8)
 
 struct bd_cache
