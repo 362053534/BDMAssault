@@ -33,12 +33,16 @@ fatfs_fs_driver_mount_info fs_driver_mount_info[FF_VOLUMES];
 #define FATFS_FS_DRIVER_MOUNT_INFO_MAX ((int)(sizeof(fs_driver_mount_info) / sizeof(fs_driver_mount_info[0])))
 #define POPSTARTER_DIR_PATH "0:/POPS"
 #define POPSTARTER_PAK_PATH "0:/POPS/POPS_IOX.PAK"
-#define POPSTARTER_PAK_IO_ERROR_LIMIT 5
-#define POPSTARTER_REMOUNT_LIMIT 3
+#define POPSTARTER_PAK_CHECK_DELAY_US 200000
 
-static unsigned int g_popstarter_pak_io_errors;
-static unsigned int g_popstarter_remounts;
-static int g_popstarter_remount_pending;
+enum popstarter_mount_state {
+    POPSTARTER_UNSELECTED = 0,
+    POPSTARTER_VOLUME_LOCKED,
+    POPSTARTER_PAK_READY,
+    POPSTARTER_PAK_FAILED
+};
+
+static enum popstarter_mount_state g_popstarter_mount_state;
 
 // Macros for defining the modified path on stack.
 #define FATFS_FS_DRIVER_NAME_ALLOC_ON_STACK_DEFINITIONS(varname) \
@@ -125,9 +129,7 @@ static void fatfs_fs_driver_initialize_all_mount_info(void)
         fs_driver_mount_info[i].mounted_bd = NULL;
     }
 
-    g_popstarter_pak_io_errors = 0;
-    g_popstarter_remounts = 0;
-    g_popstarter_remount_pending = 0;
+    g_popstarter_mount_state = POPSTARTER_UNSELECTED;
 }
 
 static int fatfs_fs_driver_find_mount_info_index_from_block_device(const struct block_device *bd)
@@ -171,19 +173,30 @@ static FRESULT fatfs_fs_driver_check_popstarter_pak(int *ready)
     return result;
 }
 
-static FRESULT fatfs_fs_driver_remount_popstarter_bd(void)
+static enum popstarter_mount_state fatfs_fs_driver_wait_popstarter_pak(void)
 {
-    static const char mount_point[] = "0:";
+    FRESULT result;
+    int ready;
 
-    /* 保留已锁定的块设备，只重建FatFs卷状态，避免恢复时改选其他分区。 */
-    f_unmount(mount_point);
-    return f_mount(&fs_driver_mount_info[0].fatfs, mount_point, 1);
+    while (1) {
+        result = fatfs_fs_driver_check_popstarter_pak(&ready);
+        if (ready)
+            return POPSTARTER_PAK_READY;
+
+        /* 大容量设备可能需要较长时间才能读取目录项，因此对可恢复状态无限等待。 */
+        if (result != FR_DISK_ERR && result != FR_NOT_READY &&
+            result != FR_NO_FILE && result != FR_NO_PATH)
+            break;
+
+        DelayThread(POPSTARTER_PAK_CHECK_DELAY_US);
+    }
+
+    return POPSTARTER_PAK_FAILED;
 }
 
 int bdm_is_fatfs_ready(const char *device_name)
 {
     struct block_device *mounted_bd;
-    FRESULT result;
     int ready = 0;
 
     if (!device_name)
@@ -192,33 +205,10 @@ int bdm_is_fatfs_ready(const char *device_name)
     _fs_lock();
     mounted_bd = fs_driver_mount_info[0].mounted_bd;
     if (mounted_bd && mounted_bd->name && strcmp(mounted_bd->name, device_name) == 0) {
-        if (g_popstarter_remount_pending) {
-            if (g_popstarter_remounts < POPSTARTER_REMOUNT_LIMIT) {
-                g_popstarter_remounts++;
-                result = fatfs_fs_driver_remount_popstarter_bd();
-                if (result == FR_OK) {
-                    g_popstarter_remount_pending = 0;
-                    g_popstarter_pak_io_errors = 0;
-                }
-            }
-        } else {
-            result = fatfs_fs_driver_check_popstarter_pak(&ready);
-            if (ready) {
-                g_popstarter_pak_io_errors = 0;
-            } else if (result == FR_DISK_ERR || result == FR_NOT_READY) {
-                g_popstarter_pak_io_errors++;
-                if (g_popstarter_pak_io_errors >= POPSTARTER_PAK_IO_ERROR_LIMIT &&
-                    g_popstarter_remounts < POPSTARTER_REMOUNT_LIMIT) {
-                    g_popstarter_pak_io_errors = 0;
-                    g_popstarter_remounts++;
-                    result = fatfs_fs_driver_remount_popstarter_bd();
-                    g_popstarter_remount_pending = result != FR_OK;
-                }
-            } else {
-                /* 文件不存在不代表卷损坏，不能因此反复重挂载。 */
-                g_popstarter_pak_io_errors = 0;
-            }
-        }
+        if (g_popstarter_mount_state == POPSTARTER_PAK_READY)
+            ready = 1;
+        else if (g_popstarter_mount_state == POPSTARTER_PAK_FAILED)
+            ready = -1;
     }
     _fs_unlock();
 
@@ -241,6 +231,8 @@ static FRESULT fatfs_fs_driver_mount_bd(int mount_info_index, struct block_devic
     mount_point[1] = ':';
     mount_point[2] = '\x00';
 
+    if (mount_info_index == 0)
+        g_popstarter_mount_state = POPSTARTER_UNSELECTED;
     fs_driver_mount_info[mount_info_index].mounted_bd = bd;
     ret = f_mount(&(fs_driver_mount_info[mount_info_index].fatfs), mount_point, 1);
     if (ret != FR_OK) {
@@ -258,6 +250,8 @@ static void fatfs_fs_driver_unmount_bd(int mount_info_index)
 
     f_unmount(mount_point);
     fs_driver_mount_info[mount_info_index].mounted_bd = NULL;
+    if (mount_info_index == 0)
+        g_popstarter_mount_state = POPSTARTER_UNSELECTED;
 }
 
 static void fatfs_fs_driver_stop_single_bd(int mount_info_index)
@@ -288,15 +282,20 @@ int connect_bd(struct block_device *bd)
         return -1;
 
     _fs_lock();
-    /* POPS固定读取mass0；发现POPS目录后就锁定该卷，后续只等待同一卷上的PAK。 */
+    /* POPS固定读取mass0；发现POPS目录后先锁定该卷，再等待PAK。 */
     if (fatfs_fs_driver_get_mounted_bd_from_index(0) == NULL) {
         M_DEBUG("connect_bd: probing candidate for mass0\n");
         if (fatfs_fs_driver_mount_bd(0, bd) == FR_OK) {
             if (fatfs_fs_driver_has_popstarter_directory()) {
-                g_popstarter_pak_io_errors = 0;
-                g_popstarter_remounts = 0;
-                g_popstarter_remount_pending = 0;
-                M_DEBUG("connect_bd: selected candidate for mass0\n");
+                g_popstarter_mount_state = POPSTARTER_VOLUME_LOCKED;
+                M_DEBUG("connect_bd: locked POPStarter volume to mass0\n");
+
+                g_popstarter_mount_state = fatfs_fs_driver_wait_popstarter_pak();
+                if (g_popstarter_mount_state == POPSTARTER_PAK_READY)
+                    M_DEBUG("connect_bd: POPS_IOX.PAK is ready\n");
+                else
+                    M_DEBUG("connect_bd: POPS_IOX.PAK check failed\n");
+
                 _fs_unlock();
                 return 0;
             }
