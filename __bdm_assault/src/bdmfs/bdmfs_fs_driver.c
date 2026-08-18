@@ -50,6 +50,9 @@ enum popstarter_mount_state {
 static enum popstarter_mount_state g_popstarter_mount_state;
 static char g_popstarter_vcd_path[POPSTARTER_VCD_PATH_MAX];
 
+extern void bdm_trace_popstarter_vcd_args(const char *module, int argc, char *argv[]);
+extern void bdm_trace_popstarter_vcd_result(int index, const char *prefix, const char *target);
+
 // Macros for defining the modified path on stack.
 #define FATFS_FS_DRIVER_NAME_ALLOC_ON_STACK_DEFINITIONS(varname) \
     const char *modified_##varname;
@@ -147,10 +150,15 @@ int bdm_set_popstarter_vcd(int argc, char *argv[])
     unsigned int name_length;
     unsigned int vcd_prefix_length = sizeof(POPSTARTER_VCD_PREFIX) - 1;
     unsigned int suffix_length = sizeof(POPSTARTER_ARG_SUFFIX) - 1;
+    const char *prefix_name;
     int i;
 
-    if (argc <= 0 || !argv)
+    bdm_trace_popstarter_vcd_args("vcd-setter", argc, argv);
+
+    if (argc <= 0 || !argv) {
+        bdm_trace_popstarter_vcd_result(-1, NULL, NULL);
         return -1;
+    }
 
     _fs_lock();
     g_popstarter_vcd_path[0] = '\0';
@@ -168,13 +176,19 @@ int bdm_set_popstarter_vcd(int argc, char *argv[])
 
         /* XX.和SB.是可选的启动类型前缀；其他名称按无前缀处理。 */
         if (arg_length >= sizeof(POPSTARTER_ARG_PREFIX_XX) - 1 &&
-            memcmp(arg, POPSTARTER_ARG_PREFIX_XX, sizeof(POPSTARTER_ARG_PREFIX_XX) - 1) == 0)
+            memcmp(arg, POPSTARTER_ARG_PREFIX_XX, sizeof(POPSTARTER_ARG_PREFIX_XX) - 1) == 0) {
             arg_prefix_length = sizeof(POPSTARTER_ARG_PREFIX_XX) - 1;
+            prefix_name = "XX";
+        }
         else if (arg_length >= sizeof(POPSTARTER_ARG_PREFIX_SB) - 1 &&
-                 memcmp(arg, POPSTARTER_ARG_PREFIX_SB, sizeof(POPSTARTER_ARG_PREFIX_SB) - 1) == 0)
+                 memcmp(arg, POPSTARTER_ARG_PREFIX_SB, sizeof(POPSTARTER_ARG_PREFIX_SB) - 1) == 0) {
             arg_prefix_length = sizeof(POPSTARTER_ARG_PREFIX_SB) - 1;
-        else
+            prefix_name = "SB";
+        }
+        else {
             arg_prefix_length = 0;
+            prefix_name = "none";
+        }
 
         if (arg_length <= arg_prefix_length + suffix_length)
             continue;
@@ -188,10 +202,12 @@ int bdm_set_popstarter_vcd(int argc, char *argv[])
                arg + arg_prefix_length, name_length);
         memcpy(g_popstarter_vcd_path + vcd_prefix_length + name_length,
                POPSTARTER_VCD_SUFFIX, sizeof(POPSTARTER_VCD_SUFFIX));
+        bdm_trace_popstarter_vcd_result(i, prefix_name, g_popstarter_vcd_path);
         _fs_unlock();
         return 0;
     }
 
+    bdm_trace_popstarter_vcd_result(-1, NULL, NULL);
     _fs_unlock();
     return -1;
 }
