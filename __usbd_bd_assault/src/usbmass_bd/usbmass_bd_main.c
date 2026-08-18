@@ -17,10 +17,12 @@ extern int usb_mass_init(void);
 
 int usbmass_bd_start(int argc, char *argv[])
 {
-    (void)argc;
-    (void)argv;
-
     M_PRINTF("USBD ASSAULT: starting USBMASS Side\n");
+
+    if (bdm_set_popstarter_vcd(argc, argv) < 0) {
+        M_PRINTF("ERROR: invalid POPStarter VCD argument!\n");
+        return MODULE_NO_RESIDENT_END;
+    }
 
     // initialize the SCSI driver
     if (scsi_init() != 0) {
@@ -34,7 +36,7 @@ int usbmass_bd_start(int argc, char *argv[])
         return MODULE_NO_RESIDENT_END;
     }
 
-    /* 只等待内存中的FatFs挂载状态，避免探测目录时提前读盘。 */
+    /* 只等待内存中的目标VCD就绪状态，避免在当前线程读盘。 */
     while (!bdm_is_usb_fatfs_ready())
         DelayThread(200000);
 

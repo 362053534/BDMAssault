@@ -756,10 +756,12 @@ int module_start(int argc, char *argv[])
     M_PRINTF("Starting module\n");
     for (i = 0; i < argc; i++)
         M_PRINTF(" - argv[%d] = %s\n", i, argv[i]);
-#else
-    (void)argc;
-    (void)argv;
 #endif
+
+    if (bdm_set_popstarter_vcd(argc, argv) < 0) {
+        M_PRINTF("ERROR: invalid POPStarter VCD argument!\n");
+        return MODULE_NO_RESIDENT_END;
+    }
 
     /* create default transfer descriptor */
     mx_sio2_init_td(&global_td);
@@ -794,7 +796,7 @@ int module_start(int argc, char *argv[])
     (void)mx_sio2_rx_pio((void *)&rv, 4);
     mx_sio2_unlock(INTR_NONE);
 
-    /* 同步初始化SD卡，并等待对应的FatFs挂载完成。 */
+    /* 同步初始化SD卡，并等待目标VCD就绪。 */
     while (!bdm_is_fatfs_ready("sdc")) {
         if (!sdcard.initialized)
             sd_detect();

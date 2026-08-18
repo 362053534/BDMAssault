@@ -8,7 +8,7 @@
 #define MODNAME "bdm_hdd"
 IRX_ID(MODNAME, 1, 1);
 
-/* FatFs挂载由BDM线程异步完成；PAK就绪前不能把控制权交给POPS。 */
+/* FatFs挂载由BDM线程异步完成；目标VCD就绪前不能把控制权交给POPS。 */
 #define BDM_HDD_POPS_WAIT_STEP_US  (200000)
 #define BDM_HDD_PROBE_RETRY_US     (500000)
 #define BDM_HDD_READY_SAMPLES      2
@@ -58,8 +58,10 @@ int _start(int argc, char *argv[])
     /* 不要把POPStarter传入的argv转给DEV9（未知-xxx参数会直接失败退出） */
     char *dev9_argv[1];
 
-    (void)argc;
-    (void)argv;
+    if (bdm_set_popstarter_vcd(argc, argv) < 0) {
+        printf("bdm_hdd: invalid POPStarter VCD argument.\n");
+        return MODULE_NO_RESIDENT_END;
+    }
 
     /* 在ATA接入前设置过滤器；不要在此处主动断开其他设备。 */
     bdm_set_ata_only(1);

@@ -32,17 +32,24 @@ fatfs_fs_driver_mount_info fs_driver_mount_info[FF_VOLUMES];
 
 #define FATFS_FS_DRIVER_MOUNT_INFO_MAX ((int)(sizeof(fs_driver_mount_info) / sizeof(fs_driver_mount_info[0])))
 #define POPSTARTER_DIR_PATH "0:/POPS"
-#define POPSTARTER_PAK_PATH "0:/POPS/POPS_IOX.PAK"
-#define POPSTARTER_PAK_CHECK_DELAY_US 200000
+#define POPSTARTER_ARG_PREFIX_XX "uLE:XX."
+#define POPSTARTER_ARG_PREFIX_SB "uLE:SB."
+#define POPSTARTER_ARG_PREFIX "uLE:"
+#define POPSTARTER_ARG_SUFFIX ".ELF"
+#define POPSTARTER_VCD_PREFIX "0:/POPS/"
+#define POPSTARTER_VCD_SUFFIX ".VCD"
+#define POPSTARTER_VCD_CHECK_DELAY_US 200000
+#define POPSTARTER_VCD_PATH_MAX (FF_MAX_LFN + 16)
 
 enum popstarter_mount_state {
     POPSTARTER_UNSELECTED = 0,
     POPSTARTER_VOLUME_LOCKED,
-    POPSTARTER_PAK_READY,
-    POPSTARTER_PAK_FAILED
+    POPSTARTER_VCD_READY,
+    POPSTARTER_VCD_FAILED
 };
 
 static enum popstarter_mount_state g_popstarter_mount_state;
+static char g_popstarter_vcd_path[POPSTARTER_VCD_PATH_MAX];
 
 // Macros for defining the modified path on stack.
 #define FATFS_FS_DRIVER_NAME_ALLOC_ON_STACK_DEFINITIONS(varname) \
@@ -130,6 +137,67 @@ static void fatfs_fs_driver_initialize_all_mount_info(void)
     }
 
     g_popstarter_mount_state = POPSTARTER_UNSELECTED;
+    g_popstarter_vcd_path[0] = '\0';
+}
+
+int bdm_set_popstarter_vcd(int argc, char *argv[])
+{
+    const char *arg;
+    unsigned int arg_length;
+    unsigned int arg_prefix_length;
+    unsigned int name_length;
+    unsigned int vcd_prefix_length = sizeof(POPSTARTER_VCD_PREFIX) - 1;
+    unsigned int suffix_length = sizeof(POPSTARTER_ARG_SUFFIX) - 1;
+    int i;
+
+    if (argc <= 0 || !argv)
+        return -1;
+
+    _fs_lock();
+    g_popstarter_vcd_path[0] = '\0';
+
+    for (i = 0; i < argc; i++) {
+        arg = argv[i];
+        if (!arg)
+            continue;
+
+        arg_length = strlen(arg);
+        if (arg_length <= suffix_length)
+            continue;
+        if (memcmp(arg + arg_length - suffix_length, POPSTARTER_ARG_SUFFIX, suffix_length) != 0)
+            continue;
+
+        /* 先匹配较长前缀，避免通用uLE:保留XX.或SB.。 */
+        if (arg_length >= sizeof(POPSTARTER_ARG_PREFIX_XX) - 1 &&
+            memcmp(arg, POPSTARTER_ARG_PREFIX_XX, sizeof(POPSTARTER_ARG_PREFIX_XX) - 1) == 0)
+            arg_prefix_length = sizeof(POPSTARTER_ARG_PREFIX_XX) - 1;
+        else if (arg_length >= sizeof(POPSTARTER_ARG_PREFIX_SB) - 1 &&
+                 memcmp(arg, POPSTARTER_ARG_PREFIX_SB, sizeof(POPSTARTER_ARG_PREFIX_SB) - 1) == 0)
+            arg_prefix_length = sizeof(POPSTARTER_ARG_PREFIX_SB) - 1;
+        else if (arg_length >= sizeof(POPSTARTER_ARG_PREFIX) - 1 &&
+                 memcmp(arg, POPSTARTER_ARG_PREFIX, sizeof(POPSTARTER_ARG_PREFIX) - 1) == 0)
+            arg_prefix_length = sizeof(POPSTARTER_ARG_PREFIX) - 1;
+        else
+            continue;
+
+        if (arg_length <= arg_prefix_length + suffix_length)
+            continue;
+
+        name_length = arg_length - arg_prefix_length - suffix_length;
+        if (name_length + sizeof(POPSTARTER_VCD_SUFFIX) - 1 > FF_MAX_LFN)
+            continue;
+
+        memcpy(g_popstarter_vcd_path, POPSTARTER_VCD_PREFIX, vcd_prefix_length);
+        memcpy(g_popstarter_vcd_path + vcd_prefix_length,
+               arg + arg_prefix_length, name_length);
+        memcpy(g_popstarter_vcd_path + vcd_prefix_length + name_length,
+               POPSTARTER_VCD_SUFFIX, sizeof(POPSTARTER_VCD_SUFFIX));
+        _fs_unlock();
+        return 0;
+    }
+
+    _fs_unlock();
+    return -1;
 }
 
 static int fatfs_fs_driver_find_mount_info_index_from_block_device(const struct block_device *bd)
@@ -160,38 +228,41 @@ static int fatfs_fs_driver_has_popstarter_directory(void)
     return f_stat(POPSTARTER_DIR_PATH, &info) == FR_OK && (info.fattrib & AM_DIR) != 0;
 }
 
-static FRESULT fatfs_fs_driver_check_popstarter_pak(int *ready)
+static FRESULT fatfs_fs_driver_check_popstarter_vcd(int *ready)
 {
     FILINFO info;
     FRESULT result;
 
     *ready = 0;
-    result = f_stat(POPSTARTER_PAK_PATH, &info);
+    if (g_popstarter_vcd_path[0] == '\0')
+        return FR_INVALID_NAME;
+
+    result = f_stat(g_popstarter_vcd_path, &info);
     if (result == FR_OK && (info.fattrib & AM_DIR) == 0)
         *ready = 1;
 
     return result;
 }
 
-static enum popstarter_mount_state fatfs_fs_driver_wait_popstarter_pak(void)
+static enum popstarter_mount_state fatfs_fs_driver_wait_popstarter_vcd(void)
 {
     FRESULT result;
     int ready;
 
     while (1) {
-        result = fatfs_fs_driver_check_popstarter_pak(&ready);
+        result = fatfs_fs_driver_check_popstarter_vcd(&ready);
         if (ready)
-            return POPSTARTER_PAK_READY;
+            return POPSTARTER_VCD_READY;
 
         /* 大容量设备可能需要较长时间才能读取目录项，因此对可恢复状态无限等待。 */
         if (result != FR_DISK_ERR && result != FR_NOT_READY &&
             result != FR_NO_FILE && result != FR_NO_PATH)
             break;
 
-        DelayThread(POPSTARTER_PAK_CHECK_DELAY_US);
+        DelayThread(POPSTARTER_VCD_CHECK_DELAY_US);
     }
 
-    return POPSTARTER_PAK_FAILED;
+    return POPSTARTER_VCD_FAILED;
 }
 
 int bdm_is_fatfs_ready(const char *device_name)
@@ -205,9 +276,9 @@ int bdm_is_fatfs_ready(const char *device_name)
     _fs_lock();
     mounted_bd = fs_driver_mount_info[0].mounted_bd;
     if (mounted_bd && mounted_bd->name && strcmp(mounted_bd->name, device_name) == 0) {
-        if (g_popstarter_mount_state == POPSTARTER_PAK_READY)
+        if (g_popstarter_mount_state == POPSTARTER_VCD_READY)
             ready = 1;
-        else if (g_popstarter_mount_state == POPSTARTER_PAK_FAILED)
+        else if (g_popstarter_mount_state == POPSTARTER_VCD_FAILED)
             ready = -1;
     }
     _fs_unlock();
@@ -282,7 +353,7 @@ int connect_bd(struct block_device *bd)
         return -1;
 
     _fs_lock();
-    /* POPS固定读取mass0；发现POPS目录后先锁定该卷，再等待PAK。 */
+    /* POPS固定读取mass0；发现POPS目录后先锁定该卷，再等待目标VCD。 */
     if (fatfs_fs_driver_get_mounted_bd_from_index(0) == NULL) {
         M_DEBUG("connect_bd: probing candidate for mass0\n");
         if (fatfs_fs_driver_mount_bd(0, bd) == FR_OK) {
@@ -290,11 +361,11 @@ int connect_bd(struct block_device *bd)
                 g_popstarter_mount_state = POPSTARTER_VOLUME_LOCKED;
                 M_DEBUG("connect_bd: locked POPStarter volume to mass0\n");
 
-                g_popstarter_mount_state = fatfs_fs_driver_wait_popstarter_pak();
-                if (g_popstarter_mount_state == POPSTARTER_PAK_READY)
-                    M_DEBUG("connect_bd: POPS_IOX.PAK is ready\n");
+                g_popstarter_mount_state = fatfs_fs_driver_wait_popstarter_vcd();
+                if (g_popstarter_mount_state == POPSTARTER_VCD_READY)
+                    M_DEBUG("connect_bd: target VCD is ready\n");
                 else
-                    M_DEBUG("connect_bd: POPS_IOX.PAK check failed\n");
+                    M_DEBUG("connect_bd: target VCD check failed\n");
 
                 _fs_unlock();
                 return 0;
