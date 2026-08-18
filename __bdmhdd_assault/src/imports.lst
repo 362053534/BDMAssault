@@ -8,6 +8,8 @@ I_DelayThread
 I_SetAlarm
 I_CancelAlarm
 I_USec2SysClock
+I_GetSystemTime
+I_SysClock2USec
 thbase_IMPORTS_end
 
 thevent_IMPORTS_start
@@ -52,6 +54,8 @@ intrman_IMPORTS_end
 ioman_IMPORTS_start
 I_AddDrv
 I_DelDrv
+I_dopen
+I_dclose
 ioman_IMPORTS_end
 
 thsemap_IMPORTS_start
