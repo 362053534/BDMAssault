@@ -30,7 +30,7 @@ static void bdm_hdd_wait_pops_on_mass0(void)
     ata_detected = 0;
     ready_samples = 0;
     probe_waited = BDM_HDD_PROBE_RETRY_US;
-    while (!bdm_is_fatfs_ready("ata")) {
+    while (bdm_is_fatfs_ready("ata") != 1) {
         if (!ata_detected) {
             status = atad_get_probe_status();
             if (status >= 0 && (status & ATA_STAT_BUSY) == 0 && (status & ATA_STAT_READY) != 0)

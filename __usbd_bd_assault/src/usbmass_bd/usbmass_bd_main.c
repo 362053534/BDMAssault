@@ -37,7 +37,7 @@ int usbmass_bd_start(int argc, char *argv[])
     }
 
     /* 只等待内存中的目标VCD就绪状态，避免在当前线程读盘。 */
-    while (!bdm_is_usb_fatfs_ready())
+    while (bdm_is_usb_fatfs_ready() != 1)
         DelayThread(200000);
 
     // return resident

@@ -797,7 +797,7 @@ int module_start(int argc, char *argv[])
     mx_sio2_unlock(INTR_NONE);
 
     /* 同步初始化SD卡，并等待目标VCD就绪。 */
-    while (!bdm_is_fatfs_ready("sdc")) {
+    while (bdm_is_fatfs_ready("sdc") != 1) {
         if (!sdcard.initialized)
             sd_detect();
         DelayThread(200 * 1000);

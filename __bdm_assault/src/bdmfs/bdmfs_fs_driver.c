@@ -44,8 +44,7 @@ fatfs_fs_driver_mount_info fs_driver_mount_info[FF_VOLUMES];
 enum popstarter_mount_state {
     POPSTARTER_UNSELECTED = 0,
     POPSTARTER_VOLUME_LOCKED,
-    POPSTARTER_VCD_READY,
-    POPSTARTER_VCD_FAILED
+    POPSTARTER_VCD_READY
 };
 
 static enum popstarter_mount_state g_popstarter_mount_state;
@@ -283,25 +282,18 @@ static FRESULT fatfs_fs_driver_check_popstarter_file(int *ready)
     return result;
 }
 
-static enum popstarter_mount_state fatfs_fs_driver_wait_popstarter_file(void)
+static void fatfs_fs_driver_wait_popstarter_file(void)
 {
-    FRESULT result;
     int ready;
 
     while (1) {
-        result = fatfs_fs_driver_check_popstarter_file(&ready);
+        fatfs_fs_driver_check_popstarter_file(&ready);
         if (ready)
-            return POPSTARTER_VCD_READY;
+            return;
 
-        /* 大容量设备可能需要较长时间才能读取目录项，因此对可恢复状态无限等待。 */
-        if (result != FR_DISK_ERR && result != FR_NOT_READY &&
-            result != FR_NO_FILE && result != FR_NO_PATH)
-            break;
-
+        /* 启动目标尚未就绪时持续等待，任何FatFs错误都不能提前放行POPStarter。 */
         DelayThread(POPSTARTER_VCD_CHECK_DELAY_US);
     }
-
-    return POPSTARTER_VCD_FAILED;
 }
 
 int bdm_is_fatfs_ready(const char *device_name)
@@ -317,8 +309,6 @@ int bdm_is_fatfs_ready(const char *device_name)
     if (mounted_bd && mounted_bd->name && strcmp(mounted_bd->name, device_name) == 0) {
         if (g_popstarter_mount_state == POPSTARTER_VCD_READY)
             ready = 1;
-        else if (g_popstarter_mount_state == POPSTARTER_VCD_FAILED)
-            ready = -1;
     }
     _fs_unlock();
 
@@ -400,11 +390,9 @@ int connect_bd(struct block_device *bd)
                 g_popstarter_mount_state = POPSTARTER_VOLUME_LOCKED;
                 M_DEBUG("connect_bd: locked POPStarter volume to mass0\n");
 
-                g_popstarter_mount_state = fatfs_fs_driver_wait_popstarter_file();
-                if (g_popstarter_mount_state == POPSTARTER_VCD_READY)
-                    M_DEBUG("connect_bd: POPStarter target file is ready\n");
-                else
-                    M_DEBUG("connect_bd: POPStarter target file check failed\n");
+                fatfs_fs_driver_wait_popstarter_file();
+                g_popstarter_mount_state = POPSTARTER_VCD_READY;
+                M_DEBUG("connect_bd: POPStarter target file is ready\n");
 
                 _fs_unlock();
                 return 0;
