@@ -81,6 +81,9 @@ FHANDLE smbman_fdhandles[MAX_FDHANDLES];
 
 #define SMB_SEARCH_BUF_MAX 4096
 #define SMB_PATH_MAX       1024
+#define SMB_KEEPALIVE_CHECK_US   2000000
+#define SMB_KEEPALIVE_IDLE_TICKS 60
+#define SMB_RECONNECT_DELAY_US   2000000
 
 static ShareEntry_t ShareList;
 static u8 SearchBuf[SMB_SEARCH_BUF_MAX];
@@ -88,119 +91,81 @@ static char smb_curdir[SMB_PATH_MAX];
 static char smb_curpath[SMB_PATH_MAX];
 static char smb_secpath[SMB_PATH_MAX];
 
-static int keepalive_mutex  = -1;
-static int keepalive_inited = 0;
-static int keepalive_locked = 1;
+static volatile int keepalive_locked = 1;
 static int keepalive_tid;
-static iop_sys_clock_t keepalive_sysclock;
+static volatile unsigned int keepalive_idle_ticks;
 
 static int UID = -1;
 static int TID = -1;
 
 static smbLogOn_in_t glogon_info;
 static smbOpenShare_in_t gopenshare_info;
+static int glogon_valid;
+static int gopenshare_valid;
 
 static int smb_LogOn(smbLogOn_in_t *logon);
 static int smb_OpenShare(smbOpenShare_in_t *openshare);
-
-//-------------------------------------------------------------------------
-// Timer Interrupt handler for Echoing the server every 3 seconds, when
-// not already doing IO, and counting after an IO operation has finished
-//
-static unsigned int timer_intr_handler(void *args)
-{
-    iSignalSema(keepalive_mutex);
-    iSetAlarm(&keepalive_sysclock, timer_intr_handler, NULL);
-
-    return (unsigned int)args;
-}
-
-//-------------------------------------------------------------------------
-static void keepalive_deinit(void)
-{
-    int oldstate;
-
-    // Cancel the alarm
-    if (keepalive_inited) {
-        CpuSuspendIntr(&oldstate);
-        CancelAlarm(timer_intr_handler, NULL);
-        CpuResumeIntr(oldstate);
-        keepalive_inited = 0;
-    }
-}
-
-//-------------------------------------------------------------------------
-static void keepalive_init(void)
-{
-    // set up the alarm
-    if ((!keepalive_inited) && (!keepalive_locked)) {
-        keepalive_deinit();
-        SetAlarm(&keepalive_sysclock, timer_intr_handler, NULL);
-        keepalive_inited = 1;
-    }
-}
+static int smb_ReconnectUntilReady(void);
 
 //-------------------------------------------------------------------------
 static void keepalive_lock(void)
 {
     keepalive_locked = 1;
+    keepalive_idle_ticks = 0;
 }
 
 //-------------------------------------------------------------------------
 static void keepalive_unlock(void)
 {
     keepalive_locked = 0;
+    keepalive_idle_ticks = 0;
 }
 
 //-------------------------------------------------------------------------
 static void smb_io_lock(void)
 {
-    keepalive_deinit();
-
     WaitSema(smbman_io_sema);
+    keepalive_idle_ticks = 0;
 }
 
 //-------------------------------------------------------------------------
 static void smb_io_unlock(void)
 {
+    keepalive_idle_ticks = 0;
     SignalSema(smbman_io_sema);
-
-    keepalive_init();
 }
 
 //-------------------------------------------------------------------------
 static void keepalive_thread(void *args)
 {
-    int opened_share = 0;
-
     (void)args;
 
     while (1) {
         int r;
 
-        // wait for keepalive mutex
-        WaitSema(keepalive_mutex);
+        DelayThread(SMB_KEEPALIVE_CHECK_US);
 
-        // ensure no IO is already processing
-        WaitSema(smbman_io_sema);
+        if (keepalive_locked) {
+            keepalive_idle_ticks = 0;
+            continue;
+        }
 
-        // echo the SMB server
-        r = smb_Echo("PS2 KEEPALIVE ECHO", 18);
-        if (r < 0) {
-            keepalive_lock();
+        if (keepalive_idle_ticks < SMB_KEEPALIVE_IDLE_TICKS)
+            keepalive_idle_ticks++;
 
-            if (TID != -1)
-                opened_share = 1;
+        if (keepalive_idle_ticks < SMB_KEEPALIVE_IDLE_TICKS)
+            continue;
 
-            if (UID != -1) {
-                r = smb_LogOn((smbLogOn_in_t *)&glogon_info);
-                if (r == 0) {
-                    if (opened_share)
-                        smb_OpenShare((smbOpenShare_in_t *)&gopenshare_info);
-                }
-            }
+        // 只在IO锁空闲时发送Echo，正常游戏读取不会被后台线程等待或打断。
+        if (PollSema(smbman_io_sema) != 0)
+            continue;
 
-            keepalive_unlock();
+        // 获取IO锁后重新检查状态，避免与注销或重连竞争。
+        if (!keepalive_locked && keepalive_idle_ticks >= SMB_KEEPALIVE_IDLE_TICKS) {
+            keepalive_idle_ticks = 0;
+            r = smb_Echo("PS2 KEEPALIVE ECHO", 18);
+            if (r < 0)
+                smb_ReconnectUntilReady();
         }
 
         SignalSema(smbman_io_sema);
@@ -217,13 +182,7 @@ int smb_init(iop_device_t *dev)
     // create a mutex for IO ops
     smbman_io_sema = CreateMutex(IOP_MUTEX_UNLOCKED);
 
-    // create a mutex for keep alive
-    keepalive_mutex = CreateMutex(IOP_MUTEX_LOCKED);
-
-    // set the keepalive timer (3 seconds)
-    USec2SysClock(3000 * 1000, &keepalive_sysclock);
-
-    // starting the keepalive thead
+    // 启动固定周期的保活线程，读写热路径只需重置空闲计数。
     thread.attr      = TH_C;
     thread.option    = 0;
     thread.thread    = (void *)keepalive_thread;
@@ -264,13 +223,10 @@ int smb_deinit(iop_device_t *dev)
 {
     (void)dev;
 
-    keepalive_deinit();
+    TerminateThread(keepalive_tid);
     DeleteThread(keepalive_tid);
 
     DeleteSema(smbman_io_sema);
-
-    DeleteSema(keepalive_mutex);
-    keepalive_mutex = -1;
 
     return 0;
 }
@@ -321,6 +277,106 @@ static char *prepare_path(const char *path, char *full_path, int max_path)
     full_path[i + 1] = '\0';
 
     return full_path;
+}
+
+//--------------------------------------------------------------
+static int smb_ReopenHandles(void)
+{
+    int i;
+
+    for (i = 0; i < MAX_FDHANDLES; i++) {
+        FHANDLE *fh = (FHANDLE *)&smbman_fdhandles[i];
+        s64 filesize;
+        int fid;
+        int mode;
+
+        if (fh->f == NULL)
+            continue;
+
+        if (fh->mode == O_DIROPEN) {
+            // 搜索句柄不能跨SMB会话复用，下一次dread会从头重新建立搜索。
+            fh->smb_fid = -1;
+            continue;
+        }
+
+        // 重连时不能再次执行截断，否则会破坏已经打开的文件。
+        mode = fh->mode & ~O_TRUNC;
+        fid  = smb_OpenAndX(UID, TID, fh->name, &filesize, mode);
+        if (fid < 0)
+            return fid;
+
+        fh->smb_fid  = fid;
+        fh->filesize = filesize;
+    }
+
+    return 0;
+}
+
+//--------------------------------------------------------------
+static int smb_RestoreConnection(void)
+{
+    u32 capabilities;
+    int r;
+
+    if (!glogon_valid)
+        return -ENOTCONN;
+
+    // 故障恢复不能等待对端优雅关闭，否则断网时可能永久阻塞。
+    smb_AbortConnection();
+    UID = -1;
+    TID = -1;
+
+    r = smb_Connect(glogon_info.serverIP, glogon_info.serverPort);
+    if (r < 0)
+        goto failed;
+
+    r = smb_NegotiateProtocol(&capabilities);
+    if (r < 0)
+        goto failed;
+
+    r = smb_SessionSetupAndX(glogon_info.User, glogon_info.Password, glogon_info.PasswordType, capabilities);
+    if (r < 0)
+        goto failed;
+    UID = r;
+
+    if (gopenshare_valid) {
+        r = smb_OpenShare((smbOpenShare_in_t *)&gopenshare_info);
+        if (r < 0)
+            goto failed;
+
+        r = smb_ReopenHandles();
+        if (r < 0)
+            goto failed;
+    }
+
+    return 0;
+
+failed:
+    smb_AbortConnection();
+    UID = -1;
+    TID = -1;
+    return r;
+}
+
+//--------------------------------------------------------------
+static int smb_ReconnectUntilReady(void)
+{
+    int r;
+
+    // 重连期间完全停止Echo，成功后从新的120秒空闲周期开始。
+    keepalive_lock();
+
+    do {
+        r = smb_RestoreConnection();
+        if (r < 0 && glogon_valid)
+            DelayThread(SMB_RECONNECT_DELAY_US);
+    } while (r < 0 && glogon_valid);
+
+    if (r >= 0) {
+        keepalive_unlock();
+    }
+
+    return r;
 }
 
 //--------------------------------------------------------------
@@ -422,19 +478,30 @@ int smb_read(iop_file_t *f, void *buf, int size)
     FHANDLE *fh = (FHANDLE *)f->privdata;
     int r;
 
-    if ((UID == -1) || (TID == -1) || (fh->smb_fid == -1))
+    if (fh == NULL)
         return -EBADF;
+
+    smb_io_lock();
+
+    if ((UID == -1) || (TID == -1) || (fh->smb_fid == -1)) {
+        r = -EBADF;
+        goto io_unlock;
+    }
 
     if ((fh->position + size) > fh->filesize)
         size = fh->filesize - fh->position;
 
-    smb_io_lock();
+    do {
+        r = smb_ReadFile(UID, TID, fh->smb_fid, fh->position, buf, size);
+        if (r < 0 && smb_ReconnectUntilReady() < 0)
+            break;
+    } while (r < 0);
 
-    r = smb_ReadFile(UID, TID, fh->smb_fid, fh->position, buf, size);
     if (r > 0) {
         fh->position += r;
     }
 
+io_unlock:
     smb_io_unlock();
 
     return r;
@@ -446,7 +513,7 @@ int smb_write(iop_file_t *f, void *buf, int size)
     FHANDLE *fh = (FHANDLE *)f->privdata;
     int r;
 
-    if ((UID == -1) || (TID == -1) || (fh->smb_fid == -1))
+    if (fh == NULL)
         return -EBADF;
 
     if ((!(fh->mode & O_RDWR)) && (!(fh->mode & O_WRONLY)))
@@ -454,13 +521,24 @@ int smb_write(iop_file_t *f, void *buf, int size)
 
     smb_io_lock();
 
-    r = smb_WriteFile(UID, TID, fh->smb_fid, fh->position, buf, size);
+    if ((UID == -1) || (TID == -1) || (fh->smb_fid == -1)) {
+        r = -EBADF;
+        goto io_unlock;
+    }
+
+    do {
+        r = smb_WriteFile(UID, TID, fh->smb_fid, fh->position, buf, size);
+        if (r < 0 && smb_ReconnectUntilReady() < 0)
+            break;
+    } while (r < 0);
+
     if (r > 0) {
         fh->position += r;
         if (fh->position > fh->filesize)
             fh->filesize += fh->position - fh->filesize;
     }
 
+io_unlock:
     smb_io_unlock();
 
     return r;
@@ -920,6 +998,7 @@ static int smb_LogOn(smbLogOn_in_t *logon)
     UID = r;
 
     memcpy((void *)&glogon_info, (void *)logon, sizeof(smbLogOn_in_t));
+    glogon_valid = 1;
 
     keepalive_unlock();
 
@@ -945,6 +1024,8 @@ static int smb_LogOff(void)
         return r;
 
     UID = -1;
+    glogon_valid    = 0;
+    gopenshare_valid = 0;
 
     keepalive_lock();
 
@@ -1095,6 +1176,7 @@ static int smb_OpenShare(smbOpenShare_in_t *openshare)
 
     // 保留原始复合路径，断线重连时会再次恢复同一个根目录。
     memcpy((void *)&gopenshare_info, (void *)openshare, sizeof(smbOpenShare_in_t));
+    gopenshare_valid = 1;
 
     return 0;
 }
@@ -1114,6 +1196,7 @@ static int smb_CloseShare(void)
         return r;
 
     TID = -1;
+    gopenshare_valid = 0;
 
     return 0;
 }
