@@ -7,7 +7,7 @@ IOP_INCS += -Iinclude
 IOP_LIBS += -lgcc
 IOP_OBJS = smbman.o smb_fio.o smb.o poll.o auth.o des.o md4.o imports.o
 
-PS2IP_DIR = ps2ip
+PS2IP_DIR = ps2ip_v24
 
 .PHONY: ps2ip ps2ip-clean
 
