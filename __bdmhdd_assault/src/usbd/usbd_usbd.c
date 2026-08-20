@@ -55,14 +55,10 @@ static void bdm_hdd_wait_pops_on_mass0(void)
 int _start(int argc, char *argv[])
 {
     int result;
-    int source_result;
     /* 不要把POPStarter传入的argv转给DEV9（未知-xxx参数会直接失败退出） */
     char *dev9_argv[1];
 
-    source_result = bdm_set_popstarter_vcd(argc, argv);
-    if (source_result == BDM_POPSTARTER_DRIVER_INERT)
-        return MODULE_RESIDENT_END;
-    if (source_result < 0) {
+    if (bdm_set_popstarter_vcd(argc, argv) < 0) {
         printf("bdm_hdd: invalid POPStarter VCD argument.\n");
         return MODULE_NO_RESIDENT_END;
     }

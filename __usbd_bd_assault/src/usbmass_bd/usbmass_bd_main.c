@@ -17,14 +17,9 @@ extern int usb_mass_init(void);
 
 int usbmass_bd_start(int argc, char *argv[])
 {
-    int source_result;
-
     M_PRINTF("USBD ASSAULT: starting USBMASS Side\n");
 
-    source_result = bdm_set_popstarter_vcd(argc, argv);
-    if (source_result == BDM_POPSTARTER_DRIVER_INERT)
-        return MODULE_RESIDENT_END;
-    if (source_result < 0) {
+    if (bdm_set_popstarter_vcd(argc, argv) < 0) {
         M_PRINTF("ERROR: invalid POPStarter VCD argument!\n");
         return MODULE_NO_RESIDENT_END;
     }

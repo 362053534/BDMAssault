@@ -17,7 +17,6 @@
 #define POPS_BOOT_MAILBOX_PATH_MAX 256
 #define POPS_BOOT_VCD_PREFIX       "0:/POPS/"
 #define POPS_BOOT_VCD_SUFFIX       ".VCD"
-#define POPS_BOOT_DEVICE_NON_BDM   (-1)
 
 typedef struct
 {
@@ -37,7 +36,7 @@ IRX_ID("bdm", MAJOR_VER, MINOR_VER);
 extern struct irx_export_table _exp_bdm;
 extern int bdm_init();
 extern void part_init();
-extern int bdm_configure_popstarter_source(int bdmEnabled, const char *vcdPath);
+extern int bdm_set_popstarter_vcd_path(const char *vcdPath);
 extern int bdmfs_fatfs_start(int argc, char *argv[]);
 
 static int pops_boot_vcd_suffix_matches(const char *suffix)
@@ -64,29 +63,24 @@ static u32 pops_boot_mailbox_checksum(const pops_boot_mailbox_t *mailbox)
 
 static int pops_boot_mailbox_is_valid(const pops_boot_mailbox_t *mailbox)
 {
+    unsigned int pathLength;
+
     if (mailbox->magic != POPS_BOOT_MAILBOX_MAGIC ||
         mailbox->version != POPS_BOOT_MAILBOX_VERSION)
         return 0;
-    if (mailbox->deviceType < POPS_BOOT_DEVICE_NON_BDM || mailbox->deviceType > 3)
+    if (mailbox->deviceType < 0 || mailbox->deviceType > 3)
         return 0;
     if (mailbox->vcdPath[POPS_BOOT_MAILBOX_PATH_MAX - 1] != '\0')
         return 0;
     if (mailbox->checksum != pops_boot_mailbox_checksum(mailbox))
         return 0;
 
-    return 1;
-}
-
-static int pops_boot_vcd_path_is_valid(const char *vcdPath)
-{
-    unsigned int pathLength;
-
-    pathLength = strlen(vcdPath);
+    pathLength = strlen(mailbox->vcdPath);
     if (pathLength <= sizeof(POPS_BOOT_VCD_PREFIX) - 1 + sizeof(POPS_BOOT_VCD_SUFFIX) - 1)
         return 0;
-    if (memcmp(vcdPath, POPS_BOOT_VCD_PREFIX, sizeof(POPS_BOOT_VCD_PREFIX) - 1) != 0)
+    if (memcmp(mailbox->vcdPath, POPS_BOOT_VCD_PREFIX, sizeof(POPS_BOOT_VCD_PREFIX) - 1) != 0)
         return 0;
-    if (!pops_boot_vcd_suffix_matches(vcdPath + pathLength - (sizeof(POPS_BOOT_VCD_SUFFIX) - 1)))
+    if (!pops_boot_vcd_suffix_matches(mailbox->vcdPath + pathLength - (sizeof(POPS_BOOT_VCD_SUFFIX) - 1)))
         return 0;
 
     return 1;
@@ -106,37 +100,22 @@ static int pops_boot_mailbox_read(void)
 
 int _start(int argc, char *argv[])
 {
-    const char *vcdPath;
-    int bdmEnabled;
-
     (void)argc;
     (void)argv;
 
     printf("Block Device Manager (BDM) v%d.%d\n", MAJOR_VER, MINOR_VER);
 
-    bdmEnabled = 1;
-    vcdPath = NULL;
-    if (pops_boot_mailbox_read() == 0) {
-        if (g_pops_boot_mailbox.deviceType == POPS_BOOT_DEVICE_NON_BDM)
-            bdmEnabled = 0;
-        else if (pops_boot_vcd_path_is_valid(g_pops_boot_mailbox.vcdPath))
-            vcdPath = g_pops_boot_mailbox.vcdPath;
-    }
-
-    /* 邮箱损坏或BDM路径异常时开放式回退，继续按PAK探测启动。 */
-    if (bdm_configure_popstarter_source(bdmEnabled, vcdPath) < 0) {
-        bdmEnabled = 1;
-        bdm_configure_popstarter_source(1, NULL);
+    /* POPStarter传入的IRX参数不包含游戏路径，必须从EE常驻邮箱读取。 */
+    if (pops_boot_mailbox_read() < 0 ||
+        bdm_set_popstarter_vcd_path(g_pops_boot_mailbox.vcdPath) < 0) {
+        /* 没有可靠的VCD名字时继续启动，FatFs改为等待POPS_IOX.PAK。 */
+        bdm_set_popstarter_vcd_path(NULL);
     }
 
     if (RegisterLibraryEntries(&_exp_bdm) != 0) {
         M_PRINTF("ERROR: Already registered!\n");
         return MODULE_NO_RESIDENT_END;
     }
-
-    /* 保留BDM导出表供专属IRX解析，但不启动任何BDM线程或文件系统。 */
-    if (!bdmEnabled)
-        return MODULE_RESIDENT_END;
 
     // initialize the block device manager
     if (bdm_init() < 0) {

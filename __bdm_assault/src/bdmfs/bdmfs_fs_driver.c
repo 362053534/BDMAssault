@@ -51,7 +51,6 @@ enum popstarter_mount_state {
 static enum popstarter_mount_state g_popstarter_mount_state;
 static char g_popstarter_vcd_path[POPSTARTER_VCD_PATH_MAX];
 static int g_popstarter_probe_configured;
-static int g_popstarter_bdm_enabled;
 
 static int popstarter_vcd_suffix_matches(const char *suffix)
 {
@@ -149,29 +148,30 @@ static void fatfs_fs_driver_initialize_all_mount_info(void)
     g_popstarter_mount_state = POPSTARTER_UNSELECTED;
 }
 
-int bdm_configure_popstarter_source(int bdm_enabled, const char *vcd_path)
+int bdm_set_popstarter_vcd_path(const char *vcd_path)
 {
-    unsigned int path_length = 0;
+    unsigned int path_length;
 
     /* 该入口只能在InitFS()前由组合模块启动代码调用。 */
     if (_fs_lock_sema_id >= 0)
         return -1;
 
-    if (bdm_enabled && vcd_path) {
-        path_length = strlen(vcd_path);
-        if (path_length <= sizeof(POPSTARTER_VCD_PREFIX) - 1 + sizeof(POPSTARTER_VCD_SUFFIX) - 1 ||
-            path_length >= sizeof(g_popstarter_vcd_path))
-            return -1;
-        if (memcmp(vcd_path, POPSTARTER_VCD_PREFIX, sizeof(POPSTARTER_VCD_PREFIX) - 1) != 0)
-            return -1;
-        if (!popstarter_vcd_suffix_matches(vcd_path + path_length - (sizeof(POPSTARTER_VCD_SUFFIX) - 1)))
-            return -1;
+    g_popstarter_vcd_path[0] = '\0';
+    if (!vcd_path) {
+        g_popstarter_probe_configured = 1;
+        return 0;
     }
 
-    g_popstarter_bdm_enabled = bdm_enabled != 0;
-    g_popstarter_vcd_path[0] = '\0';
-    if (bdm_enabled && vcd_path)
-        memcpy(g_popstarter_vcd_path, vcd_path, path_length + 1);
+    path_length = strlen(vcd_path);
+    if (path_length <= sizeof(POPSTARTER_VCD_PREFIX) - 1 + sizeof(POPSTARTER_VCD_SUFFIX) - 1 ||
+        path_length >= sizeof(g_popstarter_vcd_path))
+        return -1;
+    if (memcmp(vcd_path, POPSTARTER_VCD_PREFIX, sizeof(POPSTARTER_VCD_PREFIX) - 1) != 0)
+        return -1;
+    if (!popstarter_vcd_suffix_matches(vcd_path + path_length - (sizeof(POPSTARTER_VCD_SUFFIX) - 1)))
+        return -1;
+
+    memcpy(g_popstarter_vcd_path, vcd_path, path_length + 1);
     g_popstarter_probe_configured = 1;
     return 0;
 }
@@ -186,15 +186,11 @@ int bdm_set_popstarter_vcd(int argc, char *argv[])
     unsigned int suffix_length = sizeof(POPSTARTER_ARG_SUFFIX) - 1;
     int i;
 
-    /* 非BDM来源不会初始化FatFs，因此必须在取得文件系统锁之前返回。 */
-    if (g_popstarter_probe_configured && !g_popstarter_bdm_enabled)
-        return BDM_POPSTARTER_DRIVER_INERT;
-
     _fs_lock();
     /* EE邮箱已明确选择VCD或PAK回退时，不再解析不可靠的IRX argv。 */
     if (g_popstarter_probe_configured) {
         _fs_unlock();
-        return BDM_POPSTARTER_DRIVER_READY;
+        return 0;
     }
     if (argc <= 0 || !argv) {
         _fs_unlock();

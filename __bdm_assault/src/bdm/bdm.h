@@ -67,10 +67,6 @@ void bdm_RegisterCallback(bdm_cb cb);
 void bdm_set_ata_only(int enable);
 int bdm_is_usb_fatfs_ready(void);
 int bdm_is_fatfs_ready(const char *device_name);
-
-/* 专属驱动继续初始化，或作为非BDM启动拦截器空驻留。 */
-#define BDM_POPSTARTER_DRIVER_READY 0
-#define BDM_POPSTARTER_DRIVER_INERT 1
 int bdm_set_popstarter_vcd(int argc, char *argv[]);
 
 #define bdm_IMPORTS_start DECLARE_IMPORT_TABLE(bdm, 1, 1)
