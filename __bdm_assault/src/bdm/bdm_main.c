@@ -4,6 +4,7 @@
 #include <sifcmd.h>
 #include <stdio.h>
 #include <string.h>
+#include <thbase.h>
 
 // #define DEBUG  //comment out this line when not debugging
 #include "include/module_debug.h"
@@ -17,6 +18,7 @@
 #define POPS_BOOT_MAILBOX_PATH_MAX 256
 #define POPS_BOOT_VCD_PREFIX       "0:/POPS/"
 #define POPS_BOOT_VCD_SUFFIX       ".VCD"
+#define POPS_BOOT_WAIT_DELAY_US    200000
 
 typedef struct
 {
@@ -98,6 +100,12 @@ static int pops_boot_mailbox_read(void)
     return pops_boot_mailbox_is_valid(&g_pops_boot_mailbox) ? 0 : -1;
 }
 
+static void pops_boot_wait_forever(void)
+{
+    while (1)
+        DelayThread(POPS_BOOT_WAIT_DELAY_US);
+}
+
 int _start(int argc, char *argv[])
 {
     (void)argc;
@@ -105,12 +113,12 @@ int _start(int argc, char *argv[])
 
     printf("Block Device Manager (BDM) v%d.%d\n", MAJOR_VER, MINOR_VER);
 
-    /* POPStarter传入的IRX参数不包含游戏路径，必须从EE常驻邮箱读取。 */
-    if (pops_boot_mailbox_read() < 0 ||
-        bdm_set_popstarter_vcd_path(g_pops_boot_mailbox.vcdPath) < 0) {
-        /* 没有可靠的VCD名字时继续启动，FatFs改为等待POPS_IOX.PAK。 */
-        bdm_set_popstarter_vcd_path(NULL);
-    }
+    /* 验证版不允许回退到PAK，未收到合法VCD路径时永久等待。 */
+    if (pops_boot_mailbox_read() < 0)
+        pops_boot_wait_forever();
+
+    if (bdm_set_popstarter_vcd_path(g_pops_boot_mailbox.vcdPath) < 0)
+        pops_boot_wait_forever();
 
     if (RegisterLibraryEntries(&_exp_bdm) != 0) {
         M_PRINTF("ERROR: Already registered!\n");
