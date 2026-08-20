@@ -38,3 +38,4 @@ jobs:
             bdmhdd.irx
             mx4sio.irx
             SMB/smbman.irx
+            SMB/ps2ip.irx

@@ -84,12 +84,25 @@ FHANDLE smbman_fdhandles[MAX_FDHANDLES];
 #define SMB_KEEPALIVE_CHECK_US   2000000
 #define SMB_KEEPALIVE_IDLE_TICKS 60
 #define SMB_RECONNECT_DELAY_US   2000000
+#define SMB_READ_AHEAD_SIZE      8192
 
 static ShareEntry_t ShareList;
 static u8 SearchBuf[SMB_SEARCH_BUF_MAX];
 static char smb_curdir[SMB_PATH_MAX];
 static char smb_curpath[SMB_PATH_MAX];
 static char smb_secpath[SMB_PATH_MAX];
+
+typedef struct
+{
+    FHANDLE *fh;
+    s64 offset;
+    int length;
+    FHANDLE *sequence_fh;
+    s64 sequence_next;
+    u8 data[SMB_READ_AHEAD_SIZE];
+} SMB_READ_AHEAD;
+
+static SMB_READ_AHEAD smb_read_ahead __attribute__((aligned(16)));
 
 static volatile int keepalive_locked = 1;
 static int keepalive_tid;
@@ -106,6 +119,40 @@ static int gopenshare_valid;
 static int smb_LogOn(smbLogOn_in_t *logon);
 static int smb_OpenShare(smbOpenShare_in_t *openshare);
 static int smb_ReconnectUntilReady(void);
+
+//-------------------------------------------------------------------------
+static int smb_IsTransportError(int error)
+{
+    switch (error) {
+        case -EPIPE:
+        case -ECONNRESET:
+        case -ECONNABORTED:
+        case -ENOTCONN:
+        case -ENETRESET:
+        case -ENETUNREACH:
+        case -ENETDOWN:
+        case -EHOSTUNREACH:
+        case -ETIMEDOUT:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+//-------------------------------------------------------------------------
+static void smb_ReadAheadInvalidate(FHANDLE *fh)
+{
+    if (fh == NULL || smb_read_ahead.fh == fh) {
+        smb_read_ahead.fh     = NULL;
+        smb_read_ahead.offset = 0;
+        smb_read_ahead.length = 0;
+    }
+
+    if (fh == NULL || smb_read_ahead.sequence_fh == fh) {
+        smb_read_ahead.sequence_fh   = NULL;
+        smb_read_ahead.sequence_next = 0;
+    }
+}
 
 //-------------------------------------------------------------------------
 static void keepalive_lock(void)
@@ -164,7 +211,7 @@ static void keepalive_thread(void *args)
         if (!keepalive_locked && keepalive_idle_ticks >= SMB_KEEPALIVE_IDLE_TICKS) {
             keepalive_idle_ticks = 0;
             r = smb_Echo("PS2 KEEPALIVE ECHO", 18);
-            if (r < 0)
+            if (smb_IsTransportError(r))
                 smb_ReconnectUntilReady();
         }
 
@@ -199,6 +246,8 @@ int smb_init(iop_device_t *dev)
 int smb_initdev(void)
 {
     int i;
+
+    smb_ReadAheadInvalidate(NULL);
 
     DelDrv(smbdev.name);
     if (AddDrv((iop_device_t *)&smbdev))
@@ -365,6 +414,7 @@ static int smb_ReconnectUntilReady(void)
 
     // 重连期间完全停止Echo，成功后从新的120秒空闲周期开始。
     keepalive_lock();
+    smb_ReadAheadInvalidate(NULL);
 
     do {
         r = smb_RestoreConnection();
@@ -377,6 +427,96 @@ static int smb_ReconnectUntilReady(void)
     }
 
     return r;
+}
+
+//--------------------------------------------------------------
+static int smb_ReadFileWithReconnect(FHANDLE *fh, s64 position, void *buf, int size)
+{
+    int r;
+
+    do {
+        r = smb_ReadFile(UID, TID, fh->smb_fid, position, buf, size);
+        if (!smb_IsTransportError(r))
+            break;
+        if (smb_ReconnectUntilReady() < 0)
+            break;
+    } while (1);
+
+    return r;
+}
+
+//--------------------------------------------------------------
+static int smb_WriteFileWithReconnect(FHANDLE *fh, s64 position, void *buf, int size)
+{
+    int r;
+
+    do {
+        r = smb_WriteFile(UID, TID, fh->smb_fid, position, buf, size);
+        if (!smb_IsTransportError(r))
+            break;
+        if (smb_ReconnectUntilReady() < 0)
+            break;
+    } while (1);
+
+    return r;
+}
+
+//--------------------------------------------------------------
+static int smb_ReadCached(FHANDLE *fh, void *buf, int size, int allow_read_ahead)
+{
+    u8 *dest;
+    s64 position;
+    int completed, remaining;
+
+    dest      = (u8 *)buf;
+    position  = fh->position;
+    completed = 0;
+    remaining = size;
+
+    while (remaining > 0) {
+        int available, r;
+
+        if (smb_read_ahead.fh == fh && position >= smb_read_ahead.offset && position < (smb_read_ahead.offset + smb_read_ahead.length)) {
+            available = smb_read_ahead.length - (int)(position - smb_read_ahead.offset);
+            if (available > remaining)
+                available = remaining;
+
+            memcpy(dest, &smb_read_ahead.data[position - smb_read_ahead.offset], available);
+            dest += available;
+            position += available;
+            completed += available;
+            remaining -= available;
+            continue;
+        }
+
+        // 第一次或跳跃读取只读取请求范围；确认连续后才扩大为预读。
+        if (!allow_read_ahead || remaining >= SMB_READ_AHEAD_SIZE) {
+            r = smb_ReadFileWithReconnect(fh, position, dest, remaining);
+            if (r <= 0)
+                return completed > 0 ? completed : r;
+
+            dest += r;
+            position += r;
+            completed += r;
+            remaining -= r;
+            continue;
+        }
+
+        available = ((fh->filesize - position) > SMB_READ_AHEAD_SIZE) ? SMB_READ_AHEAD_SIZE : (int)(fh->filesize - position);
+        if (available <= 0)
+            break;
+
+        smb_ReadAheadInvalidate(NULL);
+        r = smb_ReadFileWithReconnect(fh, position, smb_read_ahead.data, available);
+        if (r <= 0)
+            return completed > 0 ? completed : r;
+
+        smb_read_ahead.fh     = fh;
+        smb_read_ahead.offset = position;
+        smb_read_ahead.length = r;
+    }
+
+    return completed;
 }
 
 //--------------------------------------------------------------
@@ -400,6 +540,7 @@ int smb_open(iop_file_t *f, const char *filename, int flags, int mode)
 
     fh = smbman_getfilefreeslot();
     if (fh) {
+        smb_ReadAheadInvalidate(fh);
         r = smb_OpenAndX(UID, TID, path, &filesize, flags);
         if (r >= 0) {
             f->privdata  = fh;
@@ -429,7 +570,7 @@ int smb_close(iop_file_t *f)
     FHANDLE *fh = (FHANDLE *)f->privdata;
     int r       = 0;
 
-    if ((UID == -1) || (TID == -1) || (fh->smb_fid == -1))
+    if (fh == NULL || (UID == -1) || (TID == -1) || (fh->smb_fid == -1))
         return -EBADF;
 
     smb_io_lock();
@@ -441,6 +582,7 @@ int smb_close(iop_file_t *f)
                 goto io_unlock;
             }
         }
+        smb_ReadAheadInvalidate(fh);
         memset(fh, 0, sizeof(FHANDLE));
         fh->smb_fid = -1;
         r           = 0;
@@ -456,6 +598,8 @@ io_unlock:
 void smb_closeAll(void)
 {
     int i;
+
+    smb_ReadAheadInvalidate(NULL);
 
     for (i = 0; i < MAX_FDHANDLES; i++) {
         FHANDLE *fh;
@@ -476,7 +620,7 @@ int smb_lseek(iop_file_t *f, int pos, int where)
 int smb_read(iop_file_t *f, void *buf, int size)
 {
     FHANDLE *fh = (FHANDLE *)f->privdata;
-    int r;
+    int allow_read_ahead, r;
 
     if (fh == NULL)
         return -EBADF;
@@ -491,14 +635,15 @@ int smb_read(iop_file_t *f, void *buf, int size)
     if ((fh->position + size) > fh->filesize)
         size = fh->filesize - fh->position;
 
-    do {
-        r = smb_ReadFile(UID, TID, fh->smb_fid, fh->position, buf, size);
-        if (r < 0 && smb_ReconnectUntilReady() < 0)
-            break;
-    } while (r < 0);
+    allow_read_ahead = (smb_read_ahead.sequence_fh == fh && smb_read_ahead.sequence_next == fh->position);
+    r                = smb_ReadCached(fh, buf, size, allow_read_ahead);
 
     if (r > 0) {
         fh->position += r;
+        smb_read_ahead.sequence_fh   = fh;
+        smb_read_ahead.sequence_next = fh->position;
+    } else if (r < 0) {
+        smb_ReadAheadInvalidate(fh);
     }
 
 io_unlock:
@@ -526,11 +671,8 @@ int smb_write(iop_file_t *f, void *buf, int size)
         goto io_unlock;
     }
 
-    do {
-        r = smb_WriteFile(UID, TID, fh->smb_fid, fh->position, buf, size);
-        if (r < 0 && smb_ReconnectUntilReady() < 0)
-            break;
-    } while (r < 0);
+    smb_ReadAheadInvalidate(NULL);
+    r = smb_WriteFileWithReconnect(fh, fh->position, buf, size);
 
     if (r > 0) {
         fh->position += r;
@@ -564,6 +706,8 @@ int smb_remove(iop_file_t *f, const char *filename)
     DPRINTF("smb_remove: filename=%s\n", filename);
 
     r = smb_Delete(UID, TID, path);
+    if (r >= 0)
+        smb_ReadAheadInvalidate(NULL);
 
     smb_io_unlock();
 
@@ -850,6 +994,8 @@ int smb_rename(iop_file_t *f, const char *oldname, const char *newname)
     DPRINTF("smb_rename: oldname=%s newname=%s\n", oldname, newname);
 
     r = smb_Rename(UID, TID, oldpath, newpath);
+    if (r >= 0)
+        smb_ReadAheadInvalidate(NULL);
 
     smb_io_unlock();
 

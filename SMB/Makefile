@@ -7,4 +7,17 @@ IOP_INCS += -Iinclude
 IOP_LIBS += -lgcc
 IOP_OBJS = smbman.o smb_fio.o smb.o poll.o auth.o des.o md4.o imports.o
 
+PS2IP_DIR = ps2ip
+
+.PHONY: ps2ip ps2ip-clean
+
+all: ps2ip
+clean: ps2ip-clean
+
+ps2ip:
+	$(MAKE) -C $(PS2IP_DIR) all
+
+ps2ip-clean:
+	$(MAKE) -C $(PS2IP_DIR) clean
+
 include ../global.make

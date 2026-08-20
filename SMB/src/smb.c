@@ -17,6 +17,8 @@
 #include "poll.h"
 #include "debug.h"
 
+int lwip_recvsplit(int s, void *header, int index, void *payload, int plen, unsigned int flags);
+
 // Round up the erasure amount, so that memset can erase memory word-by-word.
 #define ZERO_PKT_ALIGNED(hdr, hdrSize) memset((hdr), 0, ((hdrSize) + 3) & ~3)
 
@@ -25,8 +27,9 @@ static server_specs_t server_specs;
 #define LM_AUTH   0
 #define NTLM_AUTH 1
 
-#define CLIENT_MAX_BUFFER_SIZE USHRT_MAX // Allow up to 65535 bytes to be received.
-#define CLIENT_MAX_XFER_SIZE   USHRT_MAX // Allow up to 65535 bytes to be transferred.
+#define CLIENT_MAX_BUFFER_SIZE 8192      // 单次接收上限必须小于TCP窗口。
+#define CLIENT_MAX_RECV_SIZE   8192      // 与本地OPL的游戏读取粒度保持一致。
+#define CLIENT_MAX_XMIT_SIZE   USHRT_MAX // 写入仍保留SMB1允许的最大长度。
 #define SMB_TCP_KEEPALIVE_MS   60000
 
 static int main_socket = -1;
@@ -168,18 +171,40 @@ static int RecvTimeout(int sock, void *buf, int bsize, int timeout_ms)
 
     ret = poll(pollfd, 1, timeout_ms);
 
-    // a result less than 0 is an error
+    // select失败属于传输层错误。
     if (ret < 0)
-        return -1;
+        return -ENETDOWN;
 
-    // 0 is a timeout
+    // 超时必须与SMB协议错误区分，供上层决定是否重连。
     if (ret == 0)
-        return 0;
+        return -ETIMEDOUT;
 
     // receive the packet
     ret = lwip_recv(sock, buf, bsize, 0);
+    if (ret <= 0)
+        return -ECONNRESET;
+
+    return ret;
+}
+
+static int RecvSplitTimeout(int sock, void *header, int index, void *payload, int plen, int timeout_ms)
+{
+    int ret;
+    struct pollfd pollfd[1];
+
+    pollfd->fd      = sock;
+    pollfd->events  = POLLIN;
+    pollfd->revents = 0;
+
+    ret = poll(pollfd, 1, timeout_ms);
     if (ret < 0)
-        return -2;
+        return -ENETDOWN;
+    if (ret == 0)
+        return -ETIMEDOUT;
+
+    ret = lwip_recvsplit(sock, header, index, payload, plen, 0);
+    if (ret <= 0)
+        return -ECONNRESET;
 
     return ret;
 }
@@ -196,7 +221,7 @@ static int SendData(int sock, char *buf, int size)
 
         result = lwip_send(sock, ptr, remaining, 0);
         if (result <= 0)
-            return result;
+            return -ECONNRESET;
 
         ptr += result;
         remaining -= result;
@@ -226,6 +251,36 @@ static int RecvData(int sock, char *buf, int size, int timeout_ms)
     return size;
 }
 
+static int DiscardData(int sock, int size, int timeout_ms)
+{
+    char discard[64];
+
+    while (size > 0) {
+        int chunk, result;
+
+        chunk  = size > (int)sizeof(discard) ? (int)sizeof(discard) : size;
+        result = RecvData(sock, discard, chunk, timeout_ms);
+        if (result <= 0)
+            return result;
+        size -= result;
+    }
+
+    return 0;
+}
+
+static int RejectSMBPacket(int received, int packet_size)
+{
+    int r;
+
+    if (received < packet_size) {
+        r = DiscardData(main_socket, packet_size - received, 3000);
+        if (r < 0)
+            return r;
+    }
+
+    return -EPROTO;
+}
+
 //-------------------------------------------------------------------------
 static int GetSMBServerReply(int shdrlen, void *spayload, int rhdrlen)
 {
@@ -237,34 +292,39 @@ static int GetSMBServerReply(int shdrlen, void *spayload, int rhdrlen)
         // Send the whole message, including the 4-byte direct transport packet header.
         rcv_size = SendData(main_socket, (char *)&SMB_buf, totalpkt_size);
         if (rcv_size <= 0)
-            return -1;
+            return rcv_size;
     } else {
         size = shdrlen + 4;
 
         // Send the headers, followed by the payload.
         rcv_size = SendData(main_socket, (char *)&SMB_buf, size);
         if (rcv_size <= 0)
-            return -1;
+            return rcv_size;
 
         rcv_size = SendData(main_socket, spayload, totalpkt_size - size);
         if (rcv_size <= 0)
-            return -1;
+            return rcv_size;
     }
 
     // Read NetBIOS session message header. Drop NBSS Session Keep alive messages (type == 0x85, with no body), but process session messages (type == 0x00).
     do {
         rcv_size = RecvData(main_socket, (char *)&SMB_buf.sessionHeader, sizeof(SMB_buf.sessionHeader), 10000); // 10s before the packet is considered lost
         if (rcv_size <= 0)
-            return -2;
+            return rcv_size;
     } while (nb_GetPacketType() != 0);
 
     totalpkt_size = nb_GetSessionMessageLength();
 
     // If rhdrlen is not specified, retrieve the whole packet. Otherwise, retrieve only the headers (caller will retrieve the payload separately).
     size     = (rhdrlen == 0) ? totalpkt_size : rhdrlen;
+    if (size > (int)sizeof(SMB_buf.smb)) {
+        // 排空超大响应以保持TCP流同步，但将它作为协议错误返回，不能触发重连循环。
+        rcv_size = DiscardData(main_socket, totalpkt_size, 3000);
+        return rcv_size < 0 ? rcv_size : -EPROTO;
+    }
     rcv_size = RecvData(main_socket, (char *)&SMB_buf.smb, size, 3000); // 3s before the packet is considered lost
     if (rcv_size <= 0)
-        return -2;
+        return rcv_size;
 
     return totalpkt_size;
 }
@@ -1027,7 +1087,9 @@ int smb_ReadAndX(int UID, int TID, int FID, s64 fileoffset, void *readbuf, int n
 {
     ReadAndXRequest_t *RR    = &SMB_buf.smb.readAndXRequest;
     ReadAndXResponse_t *RRsp = &SMB_buf.smb.readAndXResponse;
-    int r, padding, DataLength;
+    u32 status;
+    int r, rcv_size, packet_size, body_size;
+    int DataLength, DataOffset, data_start, payload_received, split_index;
 
     ZERO_PKT_ALIGNED(RR, sizeof(ReadAndXRequest_t));
 
@@ -1045,36 +1107,119 @@ int smb_ReadAndX(int UID, int TID, int FID, s64 fileoffset, void *readbuf, int n
     RR->MaxCountHigh = (u16)(nbytes >> 16);
 
     nb_SetSessionMessage(sizeof(ReadAndXRequest_t));
-    r = GetSMBServerReply(0, NULL, sizeof(ReadAndXResponse_t));
+    r = SendData(main_socket, (char *)&SMB_buf, sizeof(ReadAndXRequest_t) + 4);
     if (r <= 0)
-        return -EIO;
+        return r;
+
+    // 分离接收由匹配的ps2ip直接把文件数据写入最终缓冲区，避免8 KiB中间复制。
+    split_index = (int)((u8 *)&RRsp->DataOffset - (u8 *)&SMB_buf);
+    do {
+        rcv_size = RecvSplitTimeout(main_socket, &SMB_buf, split_index, readbuf, nbytes, 10000);
+        if (rcv_size <= 0)
+            return rcv_size;
+
+        if (rcv_size < (int)sizeof(SMB_buf.sessionHeader)) {
+            r = RecvData(main_socket, ((char *)&SMB_buf) + rcv_size, sizeof(SMB_buf.sessionHeader) - rcv_size, 3000);
+            if (r <= 0)
+                return r;
+            rcv_size += r;
+        }
+
+        packet_size = nb_GetSessionMessageLength() + 4;
+        if (packet_size < 4 || rcv_size > packet_size)
+            return -EPROTO;
+
+        if (nb_GetPacketType() != 0) {
+            r = DiscardData(main_socket, packet_size - rcv_size, 3000);
+            if (r < 0)
+                return r;
+        }
+    } while (nb_GetPacketType() != 0);
+
+    body_size = packet_size - 4;
+    if (rcv_size < 4 + (int)sizeof(SMBHeader_t)) {
+        int header_size = 4 + (int)sizeof(SMBHeader_t);
+
+        if (header_size > packet_size)
+            header_size = packet_size;
+        r = RecvData(main_socket, ((char *)&SMB_buf) + rcv_size, header_size - rcv_size, 3000);
+        if (r <= 0)
+            return r;
+        rcv_size += r;
+    }
 
     // check sanity of SMB header
-    if (RRsp->smbH.Magic != SMB_MAGIC)
-        return -EIO;
+    if (body_size < (int)sizeof(SMBHeader_t) || RRsp->smbH.Magic != SMB_MAGIC)
+        return RejectSMBPacket(rcv_size, packet_size);
 
-    // check there's no error
-    if ((RRsp->smbH.Eclass | (RRsp->smbH.Ecode << 16)) != STATUS_SUCCESS)
-        return -EIO;
-
-    // Skip any padding bytes.
-    padding = RRsp->DataOffset - sizeof(ReadAndXResponse_t);
-    if (padding > 0) {
-        r = RecvData(main_socket, (char *)(RRsp + 1), padding, 3000); // 3s before the packet is considered lost
-        if (r <= 0)
-            return -2;
+    status = (u32)(u16)RRsp->smbH.Eclass | ((u32)(u16)RRsp->smbH.Ecode << 16);
+    switch (status) {
+        case STATUS_SUCCESS:
+            break;
+        case STATUS_END_OF_FILE:
+            if (rcv_size < packet_size) {
+                r = DiscardData(main_socket, packet_size - rcv_size, 3000);
+                if (r < 0)
+                    return r;
+            }
+            return 0;
+        case STATUS_INVALID_HANDLE:
+        case STATUS_NETWORK_NAME_DELETED:
+        case STATUS_USER_SESSION_DELETED:
+        case STATUS_CONNECTION_DISCONNECTED:
+        case STATUS_CONNECTION_RESET:
+        case STATUS_NETWORK_SESSION_EXPIRED:
+            return -ENOTCONN;
+        default:
+            if (rcv_size < packet_size) {
+                r = DiscardData(main_socket, packet_size - rcv_size, 3000);
+                if (r < 0)
+                    return r;
+            }
+            return -EIO;
     }
 
+    if (body_size < (int)sizeof(ReadAndXResponse_t))
+        return RejectSMBPacket(rcv_size, packet_size);
+
+    if (rcv_size < 4 + (int)sizeof(ReadAndXResponse_t)) {
+        r = RecvData(main_socket, ((char *)&SMB_buf) + rcv_size, 4 + sizeof(ReadAndXResponse_t) - rcv_size, 3000);
+        if (r <= 0)
+            return r;
+        rcv_size += r;
+    }
+
+    DataOffset = RRsp->DataOffset;
     DataLength = (int)(((u32)RRsp->DataLengthHigh << 16) | RRsp->DataLengthLow);
-    if (DataLength > 0) {
-        r = RecvData(main_socket, readbuf, DataLength, 3000); // 3s before the packet is considered lost
-        if (r <= 0)
-            return -2;
+    if (DataOffset < (int)sizeof(ReadAndXResponse_t) || DataOffset > body_size || DataLength < 0 || DataLength > nbytes || DataLength > (body_size - DataOffset))
+        return RejectSMBPacket(rcv_size, packet_size);
+
+    data_start = DataOffset + 4;
+    if (rcv_size < data_start) {
+        r = DiscardData(main_socket, data_start - rcv_size, 3000);
+        if (r < 0)
+            return r;
+        rcv_size = data_start;
     }
 
-    r = DataLength;
+    payload_received = rcv_size - data_start;
+    if (payload_received < 0 || payload_received > DataLength)
+        return RejectSMBPacket(rcv_size, packet_size);
 
-    return r;
+    if (payload_received < DataLength) {
+        r = RecvData(main_socket, (char *)readbuf + payload_received, DataLength - payload_received, 3000);
+        if (r <= 0)
+            return r;
+        rcv_size += r;
+    }
+
+    if (rcv_size < packet_size) {
+        r = DiscardData(main_socket, packet_size - rcv_size, 3000);
+        if (r < 0)
+            return r;
+    }
+
+    return DataLength;
 }
 
 int smb_ReadFile(int UID, int TID, int FID, s64 fileoffset, void *readbuf, int nbytes)
@@ -1089,7 +1234,7 @@ int smb_ReadFile(int UID, int TID, int FID, s64 fileoffset, void *readbuf, int n
 
     while (remaining > 0) {
         int result, toRead;
-        toRead = remaining > CLIENT_MAX_XFER_SIZE ? CLIENT_MAX_XFER_SIZE : remaining;
+        toRead = remaining > CLIENT_MAX_RECV_SIZE ? CLIENT_MAX_RECV_SIZE : remaining;
 
         result = smb_ReadAndX(UID, TID, FID, pos, ptr, toRead);
         if (result <= 0)
@@ -1133,15 +1278,25 @@ int smb_WriteAndX(int UID, int TID, int FID, s64 fileoffset, void *writebuf, int
     nb_SetSessionMessage(sizeof(WriteAndXRequest_t) + padding + nbytes);
     r = GetSMBServerReply(sizeof(WriteAndXRequest_t) + padding, writebuf, 0);
     if (r <= 0)
-        return -EIO;
+        return r;
 
     // check sanity of SMB header
     if (WRsp->smbH.Magic != SMB_MAGIC)
         return -EIO;
 
-    // check there's no error
-    if ((WRsp->smbH.Eclass | (WRsp->smbH.Ecode << 16)) != STATUS_SUCCESS)
-        return -EIO;
+    switch ((u32)(u16)WRsp->smbH.Eclass | ((u32)(u16)WRsp->smbH.Ecode << 16)) {
+        case STATUS_SUCCESS:
+            break;
+        case STATUS_INVALID_HANDLE:
+        case STATUS_NETWORK_NAME_DELETED:
+        case STATUS_USER_SESSION_DELETED:
+        case STATUS_CONNECTION_DISCONNECTED:
+        case STATUS_CONNECTION_RESET:
+        case STATUS_NETWORK_SESSION_EXPIRED:
+            return -ENOTCONN;
+        default:
+            return -EIO;
+    }
 
     return nbytes;
 }
@@ -1159,7 +1314,7 @@ int smb_WriteFile(int UID, int TID, int FID, s64 fileoffset, void *writebuf, int
     while (remaining > 0) {
         int result, toWrite;
 
-        toWrite = remaining > CLIENT_MAX_XFER_SIZE ? CLIENT_MAX_XFER_SIZE : remaining;
+        toWrite = remaining > CLIENT_MAX_XMIT_SIZE ? CLIENT_MAX_XMIT_SIZE : remaining;
 
         result = smb_WriteAndX(UID, TID, FID, pos, ptr, toWrite);
         if (result <= 0)
@@ -1194,7 +1349,7 @@ int smb_Close(int UID, int TID, int FID)
     nb_SetSessionMessage(sizeof(CloseRequest_t));
     r = GetSMBServerReply(0, NULL, 0);
     if (r <= 0)
-        return -EIO;
+        return r;
 
     // check sanity of SMB header
     if (CRsp->smbH.Magic != SMB_MAGIC)
@@ -1554,15 +1709,25 @@ int smb_Echo(void *echo, int len)
     nb_SetSessionMessage(sizeof(EchoRequest_t) + (u16)len);
     r = GetSMBServerReply(0, NULL, 0);
     if (r <= 0)
-        return -EIO;
+        return r;
 
     // check sanity of SMB header
     if (ERsp->smbH.Magic != SMB_MAGIC)
         return -EIO;
 
-    // check there's no error
-    if ((ERsp->smbH.Eclass | (ERsp->smbH.Ecode << 16)) != STATUS_SUCCESS)
-        return -EIO;
+    switch ((u32)(u16)ERsp->smbH.Eclass | ((u32)(u16)ERsp->smbH.Ecode << 16)) {
+        case STATUS_SUCCESS:
+            break;
+        case STATUS_INVALID_HANDLE:
+        case STATUS_NETWORK_NAME_DELETED:
+        case STATUS_USER_SESSION_DELETED:
+        case STATUS_CONNECTION_DISCONNECTED:
+        case STATUS_CONNECTION_RESET:
+        case STATUS_NETWORK_SESSION_EXPIRED:
+            return -ENOTCONN;
+        default:
+            return -EIO;
+    }
 
     if (memcmp(&ERsp->ByteField[0], echo, len))
         return -EIO;

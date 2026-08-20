@@ -15,6 +15,10 @@ I_inet_addr
 I_lwip_setsockopt
 ps2ip_IMPORTS_end
 
+ps2split_IMPORTS_start
+I_lwip_recvsplit
+ps2split_IMPORTS_end
+
 intrman_IMPORTS_start
 I_CpuSuspendIntr
 I_CpuResumeIntr
