@@ -116,6 +116,7 @@ static smbOpenShare_in_t gopenshare_info;
 static int glogon_valid;
 static int gopenshare_valid;
 
+static int smb_SessionSetupWithAnonymousFallback(smbLogOn_in_t *logon, u32 capabilities, int *fallback_used);
 static int smb_LogOn(smbLogOn_in_t *logon);
 static int smb_OpenShare(smbOpenShare_in_t *openshare);
 static int smb_ReconnectUntilReady(void);
@@ -365,6 +366,7 @@ static int smb_ReopenHandles(void)
 static int smb_RestoreConnection(void)
 {
     u32 capabilities;
+    int fallback_used;
     int r;
 
     if (!glogon_valid)
@@ -383,10 +385,13 @@ static int smb_RestoreConnection(void)
     if (r < 0)
         goto failed;
 
-    r = smb_SessionSetupAndX(glogon_info.User, glogon_info.Password, glogon_info.PasswordType, capabilities);
+    r = smb_SessionSetupWithAnonymousFallback(&glogon_info, capabilities, &fallback_used);
     if (r < 0)
         goto failed;
     UID = r;
+
+    if (fallback_used)
+        strcpy(glogon_info.User, "PS2");
 
     if (gopenshare_valid) {
         r = smb_OpenShare((smbOpenShare_in_t *)&gopenshare_info);
@@ -1120,9 +1125,31 @@ static void smb_GetPasswordHashes(smbGetPasswordHashes_in_t *in, smbGetPasswordH
 //--------------------------------------------------------------
 static int smb_LogOff(void);
 
+static int smb_SessionSetupWithAnonymousFallback(smbLogOn_in_t *logon, u32 capabilities, int *fallback_used)
+{
+    int r;
+
+    *fallback_used = 0;
+
+    r = smb_SessionSetupAndX(logon->User, logon->Password, logon->PasswordType, capabilities);
+    if (r >= 0)
+        return r;
+
+    // 只在真正的匿名登录被服务器拒绝时，以OPL兼容用户名再尝试一次。
+    if (logon->User[0] != '\0' || logon->Password[0] != '\0' || logon->PasswordType != NO_PASSWORD)
+        return r;
+
+    r = smb_SessionSetupAndX("PS2", logon->Password, logon->PasswordType, capabilities);
+    if (r >= 0)
+        *fallback_used = 1;
+
+    return r;
+}
+
 static int smb_LogOn(smbLogOn_in_t *logon)
 {
     u32 capabilities;
+    int fallback_used;
     int r;
 
     if (UID != -1) {
@@ -1137,13 +1164,15 @@ static int smb_LogOn(smbLogOn_in_t *logon)
     if (r < 0)
         return -SMB_DEVCTL_LOGON_ERR_PROT;
 
-    r = smb_SessionSetupAndX(logon->User, logon->Password, logon->PasswordType, capabilities);
+    r = smb_SessionSetupWithAnonymousFallback(logon, capabilities, &fallback_used);
     if (r < 0)
         return -SMB_DEVCTL_LOGON_ERR_LOGON;
 
     UID = r;
 
     memcpy((void *)&glogon_info, (void *)logon, sizeof(smbLogOn_in_t));
+    if (fallback_used)
+        strcpy(glogon_info.User, "PS2");
     glogon_valid = 1;
 
     keepalive_unlock();
